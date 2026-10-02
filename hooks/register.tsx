@@ -69,6 +69,9 @@ let me: Own | null = null
 let hasPrompted = false
 let heldTurnId: string | null = null
 let isHandingOff = false
+// ⇢ takes two presses: the first arms it for a few seconds, the second fires
+let armedId: string | null = null
+const ARM_MS = 4_000
 let deck: Card[] = []
 let lastDeckJson = ''
 let isCollapsed = false
@@ -390,6 +393,25 @@ async function finishHandoff($: EngineInterface) {
   }
 }
 
+// The first press on ⇢ arms the card's hand-off and shows it plainly; the
+// second, within ARM_MS, runs it. A press elsewhere, or time, disarms.
+function pressHandoff($: EngineInterface, card: Card, isMe: boolean) {
+  if (armedId !== card.id) {
+    armedId = card.id
+    $.ui.invalidate('ui.render')
+    $.clock.after(ARM_MS, () => {
+      if (armedId === card.id) {
+        armedId = null
+        $.ui.invalidate('ui.render')
+      }
+    })
+    return
+  }
+  armedId = null
+  $.ui.invalidate('ui.render')
+  void (isMe ? startHandoff($) : relay($, card, HANDOFF))
+}
+
 async function jumpTo($: EngineInterface, appId: string | undefined) {
   if (!appId) return
   try {
@@ -607,13 +629,22 @@ export const register: Register = (on, options) => {
                     />
                   </Box>
                   <Box flexDirection="row" gap={1}>
-                    <Button
-                      key={`handoff:${card.id}`}
-                      plain
-                      dimColor
-                      label="⇢"
-                      onPress={() => void (isMe ? startHandoff($) : relay($, card, HANDOFF))}
-                    />
+                    {armedId === card.id ? (
+                      <Button
+                        key={`handoff:${card.id}`}
+                        variant="primary"
+                        label="hand off"
+                        onPress={() => pressHandoff($, card, isMe)}
+                      />
+                    ) : (
+                      <Button
+                        key={`handoff:${card.id}`}
+                        plain
+                        dimColor
+                        label="⇢"
+                        onPress={() => pressHandoff($, card, isMe)}
+                      />
+                    )}
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>

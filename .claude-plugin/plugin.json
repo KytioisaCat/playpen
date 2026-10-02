@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": { "name": "Joel Rönnqvist" },
   "repository": "https://github.com/KytioisaCat/switchboard",
