@@ -694,19 +694,23 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const isOpen = openId === card.id
           const options = card.question?.options ?? []
+          const hasAnswer = options.length > 0 || !!card.suggestion
+          // an open card takes two places and wraps its question whole
+          const width = isOpen ? Math.min(e.props.bodyColumns, cardWidth * 2 + 1) : cardWidth
+          const room = width - 4
           return (
             // a thin frame around the whole card: dim, full strength on this
             // session, and the surface brightens it under the pointer by itself
             <Box
               key={`card:${card.id}`}
               flexDirection="column"
-              width={cardWidth}
+              width={width}
               paddingX={1}
               borderStyle="round"
               borderDimColor={!isMe}
               hover={{ borderDimColor: false }}
             >
-              <Box flexDirection="column" width={inner}>
+              <Box flexDirection="column" width={room}>
                 <Box flexDirection="row" justifyContent="space-between">
                   <Box flexDirection="row" gap={1} overflow="hidden">
                     <Text color={lampColor(card.state)}>●</Text>
@@ -744,44 +748,50 @@ export const register: Register = (on, options) => {
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>
-                {isOpen && options.length > 0 && card.question ? (
-                  // the answer rows: the question, then one full-width row per
-                  // option; the card is taller only while it is open
-                  <Box flexDirection="column">
-                    <Text color="red" wrap="truncate-end">
-                      {trim(card.question.text, inner)}
-                    </Text>
-                    {options.map((label, i) => (
-                      <Button
-                        key={`answer:${card.id}:${label}`}
-                        plain
-                        hotkey={String(i + 1)}
-                        label={trim(label, inner - 3)}
-                        onPress={() => void answer($, card, isMe, label)}
-                      />
-                    ))}
-                  </Box>
-                ) : isOpen && card.suggestion ? (
-                  // the answer row: the suggestion in that session's prompt box
-                  <Box flexDirection="row" gap={1} overflow="hidden">
-                    <Button
-                      key={`suggest:${card.id}`}
-                      variant="primary"
-                      label="send"
-                      onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
-                    />
-                    <Text dimColor wrap="truncate-end">
-                      {trim(card.suggestion, inner - 9)}
-                    </Text>
-                  </Box>
-                ) : card.state === 'waiting' ? (
-                  <Text color="red" wrap="truncate-end">
-                    {card.question ? trim(card.question.text, inner) : 'needs you'}
+                {card.state === 'waiting' ? (
+                  // open, the whole question; otherwise one line of it
+                  <Text color="red" wrap={isOpen ? 'wrap' : 'truncate-end'}>
+                    {card.question ? (isOpen ? card.question.text : trim(card.question.text, room)) : 'needs you'}
                   </Text>
                 ) : (
                   <Text dimColor wrap="truncate-end">
                     {card.gist || stateWord(card.state)}
                   </Text>
+                )}
+                {hasAnswer && (
+                  // The answer rows: one per option, or the suggestion with a
+                  // send button. Shown while the card is open; otherwise drawn
+                  // hidden, and the surface reveals them under the pointer where
+                  // it applies hover styles (the terminal today).
+                  <Box
+                    flexDirection="column"
+                    display={isOpen ? 'flex' : 'none'}
+                    {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
+                  >
+                    {options.length > 0 ? (
+                      options.map((label, i) => (
+                        <Button
+                          key={`answer:${card.id}:${label}`}
+                          plain
+                          hotkey={String(i + 1)}
+                          label={trim(label, room - 3)}
+                          onPress={() => void answer($, card, isMe, label)}
+                        />
+                      ))
+                    ) : (
+                      <Box flexDirection="row" gap={1} overflow="hidden">
+                        <Button
+                          key={`suggest:${card.id}`}
+                          variant="primary"
+                          label="send"
+                          onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
+                        />
+                        <Text dimColor wrap="truncate-end">
+                          {trim(card.suggestion ?? '', room - 9)}
+                        </Text>
+                      </Box>
+                    )}
+                  </Box>
                 )}
               </Box>
             </Box>
