@@ -1,6 +1,39 @@
 {
   "name": "switchboard",
-  "version": "0.1.0",
-  "description": "A band above the prompt with a card per active Claude Code session: status lamp, short label, latest status, jump and hide.",
-  "author": { "name": "Joel Rönnqvist" }
+  "version": "0.2.0",
+  "description": "Your other Claude Code sessions as cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
+  "author": { "name": "Joel Rönnqvist" },
+  "repository": "https://github.com/KytioisaCat/switchboard",
+  "license": "MIT",
+  "keywords": ["mod", "sessions", "overview", "multitasking"],
+  "userConfig": {
+    "window_hours": {
+      "type": "number",
+      "title": "Hours of history",
+      "description": "Show sessions active within this many hours. Running sessions always show.",
+      "default": 12,
+      "min": 1,
+      "max": 168
+    },
+    "max_cards": {
+      "type": "number",
+      "title": "Maximum cards",
+      "description": "How many session cards the band shows at most.",
+      "default": 8,
+      "min": 1,
+      "max": 16
+    },
+    "summarize": {
+      "type": "boolean",
+      "title": "Short labels",
+      "description": "Let a small model write the short label and status line on each card. Off, the card shows the session title and the latest reply cut short.",
+      "default": true
+    },
+    "model": {
+      "type": "string",
+      "title": "Label model",
+      "description": "Model alias or id for the short labels.",
+      "default": "haiku"
+    }
+  }
 }

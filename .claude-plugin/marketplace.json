@@ -1,0 +1,12 @@
+{
+  "name": "switchboard",
+  "description": "switchboard: your other Claude Code sessions as cards above the prompt",
+  "owner": { "name": "Joel Rönnqvist" },
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": "./",
+      "description": "Your other Claude Code sessions as cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there."
+    }
+  ]
+}
