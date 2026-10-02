@@ -477,7 +477,7 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const canRelay = !isMe && card.question !== null && card.question.options.length > 0
           return (
-            // a thin frame around the whole card, dim at rest; the surface
+            // a thin frame around the whole card: dim, full strength on this session, and the surface
             // brightens it under the pointer by itself, no hook involved
             <Box
               key={`card:${card.id}`}
@@ -486,8 +486,7 @@ export const register: Register = (on, options) => {
               paddingX={1}
               borderStyle="round"
               borderDimColor={!isMe}
-              borderColor={isMe ? 'cyan' : undefined}
-              hover={{ borderDimColor: false, borderColor: 'cyan' }}
+              hover={{ borderDimColor: false }}
             >
               <Box flexDirection="column" width={inner}>
                 <Box flexDirection="row" justifyContent="space-between">
