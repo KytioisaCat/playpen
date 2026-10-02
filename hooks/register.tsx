@@ -100,13 +100,16 @@ const stateWord = (state: State) =>
   state === 'working' ? 'working' : state === 'waiting' ? 'needs you' : state === 'done' ? 'done' : 'ended'
 
 const mcpText = (r: { content: { type: string; text?: string }[] }) =>
-  r.content.map(b => (b.type === 'text' ? b.text ?? '' : '')).join('')
+  r.content.map(b => (b.type === 'text' ? (b.text ?? '') : '')).join('')
 
 // The AskUserQuestion input, cut down to the first question and its labels.
 function toQuestion(input: unknown): Question | null {
   const q = (input as { questions?: { question?: string; options?: { label?: string }[] }[] })?.questions?.[0]
   if (!q?.question) return null
-  const options = (q.options ?? []).map(o => o.label ?? '').filter(Boolean).slice(0, 4)
+  const options = (q.options ?? [])
+    .map(o => o.label ?? '')
+    .filter(Boolean)
+    .slice(0, 4)
   return { text: q.question, options }
 }
 
@@ -143,8 +146,7 @@ async function writeMe($: EngineInterface, patch: Partial<Own> = {}) {
   }
 }
 
-const settle = ($: EngineInterface) =>
-  writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
+const settle = ($: EngineInterface) => writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
 
 async function mySnippet($: EngineInterface) {
   const last = [...(await $.session.messages())].reverse().find(m => m.role === 'assistant' && m.text.trim())
@@ -404,7 +406,12 @@ export const register: Register = (on, options) => {
   // The dialog is answered inside the tool call, so this call's end is the end
   // of this call's wait, and no other's.
   on('tool.call', async ($, e, next) => {
-    const { tool, tool_use_id, agentId: _agent, ...input } = e as Record<string, unknown> & {
+    const {
+      tool,
+      tool_use_id,
+      agentId: _agent,
+      ...input
+    } = e as Record<string, unknown> & {
       tool: string
       tool_use_id: string
     }
@@ -457,8 +464,11 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     // three cards across; each is two rows: the lamp, label and ×, then the gist
-    const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)))
-    const inner = cardWidth - 1
+    const cardWidth = Math.max(
+      MIN_CARD,
+      Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)),
+    )
+    const inner = cardWidth - 3 // less the left rule and its gap
     const labelMax = Math.max(8, inner - 4)
 
     return (
@@ -467,40 +477,47 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const canRelay = !isMe && card.question !== null && card.question.options.length > 0
           return (
-            <Box key={`card:${card.id}`} flexDirection="column" width={cardWidth}>
-              <Box flexDirection="row" justifyContent="space-between">
-                <Box flexDirection="row" gap={1} overflow="hidden">
-                  <Text color={lampColor(card.state)}>●</Text>
-                  <Button
-                    key={`jump:${card.id}`}
-                    plain
-                    label={trim(card.label, labelMax)}
-                    onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
-                  />
-                </Box>
-                <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
+            <Box key={`card:${card.id}`} flexDirection="row" width={cardWidth} gap={1}>
+              {/* a thin left rule marks where the card begins; it rides both rows */}
+              <Box flexDirection="column">
+                <Text dimColor>│</Text>
+                <Text dimColor>│</Text>
               </Box>
-              {canRelay && card.question ? (
-                <Box flexDirection="row" gap={1} overflow="hidden">
-                  {card.question.options.slice(0, 2).map(label => (
+              <Box flexDirection="column" width={inner}>
+                <Box flexDirection="row" justifyContent="space-between">
+                  <Box flexDirection="row" gap={1} overflow="hidden">
+                    <Text color={lampColor(card.state)}>●</Text>
                     <Button
-                      key={`answer:${card.id}:${label}`}
+                      key={`jump:${card.id}`}
                       plain
-                      label={trim(label, Math.floor(inner / 2) - 1)}
-                      onPress={() => void relay($, card, label)}
+                      label={trim(card.label, labelMax)}
+                      onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
                     />
-                  ))}
-                  {card.question.options.length > 2 && <Text dimColor>…</Text>}
+                  </Box>
+                  <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                 </Box>
-              ) : card.state === 'waiting' ? (
-                <Text color="red" wrap="truncate-end">
-                  {card.question ? trim(card.question.text, inner) : 'needs you'}
-                </Text>
-              ) : (
-                <Text dimColor wrap="truncate-end">
-                  {card.gist || stateWord(card.state)}
-                </Text>
-              )}
+                {canRelay && card.question ? (
+                  <Box flexDirection="row" gap={1} overflow="hidden">
+                    {card.question.options.slice(0, 2).map(label => (
+                      <Button
+                        key={`answer:${card.id}:${label}`}
+                        plain
+                        label={trim(label, Math.floor(inner / 2) - 1)}
+                        onPress={() => void relay($, card, label)}
+                      />
+                    ))}
+                    {card.question.options.length > 2 && <Text dimColor>…</Text>}
+                  </Box>
+                ) : card.state === 'waiting' ? (
+                  <Text color="red" wrap="truncate-end">
+                    {card.question ? trim(card.question.text, inner) : 'needs you'}
+                  </Text>
+                ) : (
+                  <Text dimColor wrap="truncate-end">
+                    {card.gist || stateWord(card.state)}
+                  </Text>
+                )}
+              </Box>
             </Box>
           )
         })}
