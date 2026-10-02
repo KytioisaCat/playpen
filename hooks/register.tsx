@@ -70,6 +70,7 @@ let me: Own | null = null
 let hasPrompted = false
 let heldTurnId: string | null = null
 let isHandingOff = false
+let handoffTurnId: string | null = null // the turn that writes the brief
 // ⇢ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
 const ARM_MS = 4_000
@@ -464,9 +465,13 @@ async function suggestFallback($: EngineInterface, reply: string) {
 async function startHandoff($: EngineInterface) {
   if (isHandingOff) return
   isHandingOff = true
+  handoffTurnId = null
+  $.ui.log('hand-off: asking for the brief')
   $.ui.toast('Hand-off: writing the brief…')
   if (heldTurnId) {
     try {
+      // ending the running turn raises its turn.complete; the brief's own
+      // turn is the next one to start, and only that one finishes the hand-off
       await $.turn.abort({ turnId: heldTurnId })
     } catch {
       // the turn had already ended; the prompt below runs when idle
@@ -477,15 +482,18 @@ async function startHandoff($: EngineInterface) {
 
 // Step two: start a fresh session in the same folder with the brief as its
 // first prompt, let it stand on its own in the sidebar, and retire this card.
-// The new session's card takes this folder's place on the board.
+// The new session's card takes this folder's place on the board. Each step
+// leaves a line in the transcript, so a failure can be read afterwards.
 async function finishHandoff($: EngineInterface) {
   if (!me) return
   const brief = await lastReply($)
   if (!brief) {
     isHandingOff = false
+    $.ui.log('hand-off: the turn ended without a brief; nothing started')
     $.ui.toast('Hand-off: no brief was written')
     return
   }
+  $.ui.log(`hand-off: brief of ${brief.length} characters; starting a new session in ${me.cwd}`)
   try {
     const r = await $.mcp.call('ccd_session', 'start_session', {
       initiation: 'user_asked',
@@ -499,6 +507,7 @@ async function finishHandoff($: EngineInterface) {
       use_worktree: false,
     })
     const text = mcpText(r)
+    $.ui.log(`hand-off: start_session answered${r.isError ? ' with an error' : ''}: ${trim(text, 300)}`)
     if (r.isError) throw new Error(text)
     const newId = text.match(/local_[0-9a-f-]+/)?.[0]
     if (newId) {
@@ -508,14 +517,27 @@ async function finishHandoff($: EngineInterface) {
       } catch {
         // stays nested; the board does not care
       }
+    } else {
+      $.ui.log('hand-off: no session id in the answer; the card stays until you confirm the new session exists')
     }
     await writeMe($, { isRetired: true })
+    $.ui.log(`hand-off: done; this card retires${newId ? `, new session ${newId}` : ''}`)
     $.ui.toast('Handed off to a new session; this card retires')
     void jumpTo($, newId)
   } catch (error) {
-    $.ui.toast(`Hand-off failed: ${trim(String(error), 60)}`)
+    // the app may not offer start_session here: leave the brief on the
+    // clipboard so a new session can be started by hand and the brief pasted
+    const reason = trim(String(error), 300)
+    $.ui.log(`hand-off: could not start the new session: ${reason}. The brief is on the clipboard.`)
+    try {
+      await $.ui.copy({ text: brief })
+    } catch {
+      // then it is in this transcript, just above
+    }
+    $.ui.toast('Hand-off: could not start a session; brief copied to the clipboard')
   } finally {
     isHandingOff = false
+    handoffTurnId = null
   }
 }
 
@@ -602,6 +624,8 @@ export const register: Register = (on, options) => {
   // still means someone wrote here.
   on('turn.start', async ($, e, next) => {
     heldTurnId = e.turnId
+    // the first turn to start after a hand-off was asked for is the brief's
+    if (isHandingOff && handoffTurnId === null) handoffTurnId = e.turnId
     const isFirst = !hasPrompted
     hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null, ...(isFirst ? { lastPromptAt: await $.clock.now() } : {}) })
@@ -701,9 +725,19 @@ export const register: Register = (on, options) => {
     const reply = await lastReply($)
     await writeMe($, { state: 'done', question: null, snippet: trim(reply, 80) })
     void refresh($)
-    // the turn that wrote the brief: start the new session from it
-    if (isHandingOff) void finishHandoff($)
-    else void suggestFallback($, reply)
+    // the turn that wrote the brief, and no other (not the one a hand-off
+    // interrupted, not a subagent's): start the new session from it
+    if (isHandingOff && e.turnId === handoffTurnId && e.agentId === undefined) {
+      if (e.isAborted) {
+        isHandingOff = false
+        handoffTurnId = null
+        $.ui.log('hand-off: the brief was interrupted; nothing started')
+      } else {
+        void finishHandoff($)
+      }
+    } else if (!isHandingOff) {
+      void suggestFallback($, reply)
+    }
     return next(e)
   })
 
