@@ -72,6 +72,10 @@ let isHandingOff = false
 // ⇢ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
 const ARM_MS = 4_000
+// ↩ opens the card's answer on its second row: the question's options, or
+// the prompt suggestion with a send button; it closes on its own
+let openId: string | null = null
+const OPEN_MS = 12_000
 let deck: Card[] = []
 let lastDeckJson = ''
 let isCollapsed = false
@@ -331,6 +335,52 @@ async function relay($: EngineInterface, card: Card, text: string) {
   $.ui.toast(sent.isDelivered ? `Sent to ${card.label}: ${trim(text, 40)}` : `Not delivered: ${sent.reason}`)
 }
 
+// What a relay does on arrival, also run directly for this session's own card:
+// end a turn that is waiting on a dialog, then submit the text as the person's
+// own prompt, so it answers the question instead of queueing behind it.
+async function applyAnswer($: EngineInterface, text: string) {
+  if (heldTurnId && (me?.question || me?.state === 'waiting')) {
+    try {
+      await $.turn.abort({ turnId: heldTurnId })
+    } catch {
+      // the turn had already ended; the prompt below runs when idle
+    }
+  }
+  void $.prompt.submit({ text, asUser: true })
+}
+
+// Sends an answer to a card's session: through the relay for another
+// session, directly for this one.
+async function answer($: EngineInterface, card: Card, isMe: boolean, text: string) {
+  openId = null
+  $.ui.invalidate('ui.render')
+  if (isMe) {
+    await applyAnswer($, text)
+    $.ui.toast(`Switchboard: ${trim(text, 40)}`)
+  } else {
+    await relay($, card, text)
+  }
+}
+
+// ↩: opens the answer row when the card has something to answer with.
+function pressAnswer($: EngineInterface, card: Card) {
+  const hasOptions = card.question !== null && card.question.options.length > 0
+  if (!hasOptions && !card.suggestion) {
+    $.ui.toast(card.question ? 'That question has no options; open the session' : 'Nothing to answer there yet')
+    return
+  }
+  openId = openId === card.id ? null : card.id
+  $.ui.invalidate('ui.render')
+  if (openId === card.id) {
+    $.clock.after(OPEN_MS, () => {
+      if (openId === card.id) {
+        openId = null
+        $.ui.invalidate('ui.render')
+      }
+    })
+  }
+}
+
 // --- hand-off: this session writes a brief, a fresh one starts from it -------
 
 // Step one, in the session being handed off: ask for the brief. The turn
@@ -559,14 +609,7 @@ export const register: Register = (on, options) => {
       void startHandoff($)
       return { consumed: 'switchboard hand-off started' }
     }
-    if (heldTurnId && (me?.question || me?.state === 'waiting')) {
-      try {
-        await $.turn.abort({ turnId: heldTurnId })
-      } catch {
-        // the turn had already ended; the prompt below runs when idle
-      }
-    }
-    void $.prompt.submit({ text, asUser: true })
+    await applyAnswer($, text)
     $.ui.toast(`Switchboard: ${trim(text, 40)}`)
     return { consumed: 'switchboard relay submitted as a prompt' }
   })
@@ -598,13 +641,14 @@ export const register: Register = (on, options) => {
       Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)),
     )
     const inner = cardWidth - 4 // less the frame and its padding
-    const labelMax = Math.max(8, inner - 6)
+    const labelMax = Math.max(8, inner - 8) // room for ⇢ ↩ ×
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
         {deck.map(card => {
           const isMe = me !== null && card.id === me.id
-          const canRelay = !isMe && card.question !== null && card.question.options.length > 0
+          const isOpen = openId === card.id
+          const options = card.question?.options ?? []
           return (
             // a thin frame around the whole card: dim, full strength on this
             // session, and the surface brightens it under the pointer by itself
@@ -645,20 +689,41 @@ export const register: Register = (on, options) => {
                         onPress={() => pressHandoff($, card, isMe)}
                       />
                     )}
+                    <Button
+                      key={`reply:${card.id}`}
+                      plain
+                      dimColor={!isOpen}
+                      label="↩"
+                      onPress={() => pressAnswer($, card)}
+                    />
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>
-                {canRelay && card.question ? (
+                {isOpen && options.length > 0 ? (
+                  // the answer row: the question's options, each one press
                   <Box flexDirection="row" gap={1} overflow="hidden">
-                    {card.question.options.slice(0, 2).map(label => (
+                    {options.slice(0, 3).map(label => (
                       <Button
                         key={`answer:${card.id}:${label}`}
                         plain
-                        label={trim(label, Math.floor(inner / 2) - 1)}
-                        onPress={() => void relay($, card, label)}
+                        label={trim(label, Math.floor(inner / Math.min(3, options.length)) - 1)}
+                        onPress={() => void answer($, card, isMe, label)}
                       />
                     ))}
-                    {card.question.options.length > 2 && <Text dimColor>…</Text>}
+                    {options.length > 3 && <Text dimColor>…</Text>}
+                  </Box>
+                ) : isOpen && card.suggestion ? (
+                  // the answer row: the suggestion in that session's prompt box
+                  <Box flexDirection="row" gap={1} overflow="hidden">
+                    <Button
+                      key={`suggest:${card.id}`}
+                      variant="primary"
+                      label="send"
+                      onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
+                    />
+                    <Text dimColor wrap="truncate-end">
+                      {trim(card.suggestion, inner - 9)}
+                    </Text>
                   </Box>
                 ) : card.state === 'waiting' ? (
                   <Text color="red" wrap="truncate-end">

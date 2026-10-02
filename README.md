@@ -11,7 +11,7 @@ A [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview) that 
 - **Lamp**: yellow while Claude works, green when the turn is done, red when the session needs you (a permission dialog or a question), grey when it has ended.
 - **Label**: what the session is about, in at most 18 characters. **Gist**: the state of the latest reply in at most 22 characters. Both are written by a small model in the language of the reply, and cached so each pair is summarized once.
 - **Click the label** to jump to that session. **×** hides the card until you write in that session again.
-- **A question on another card** shows its first two options as buttons. One press answers it there: the text is relayed to that session, which ends its wait and submits it as your own prompt.
+- **↩ answers from here.** When the session has asked a question, the card's second row becomes its options; one press answers it there. When there is no question but a suggested prompt sits in that session's box, the row becomes **send** plus the suggestion. The text is relayed to that session, which ends its wait and submits it as your own prompt.
 - **A place belongs to a project.** The first card from a folder takes the next free place, and a later session in the same folder sits with it. Nothing moves when activity changes.
 - **⇢ hands a session off** (press it twice: the first press arms it, the second within four seconds runs it). The session writes a brief of its work, a fresh session starts in the same folder with that brief as its first prompt, and the new card takes the old one's place. For when a context has grown long.
 - `/board` collapses or expands the band.
