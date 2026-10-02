@@ -463,26 +463,32 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    // three cards across; each is two rows: the lamp, label and ×, then the gist
+    // three cards across; each is two rows inside a thin frame: the lamp, label and ×, then the gist
     const cardWidth = Math.max(
       MIN_CARD,
       Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)),
     )
-    const inner = cardWidth - 3 // less the left rule and its gap
+    const inner = cardWidth - 4 // less the frame and its padding
     const labelMax = Math.max(8, inner - 4)
 
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
         {deck.map(card => {
           const isMe = me !== null && card.id === me.id
           const canRelay = !isMe && card.question !== null && card.question.options.length > 0
           return (
-            <Box key={`card:${card.id}`} flexDirection="row" width={cardWidth} gap={1}>
-              {/* a thin left rule marks where the card begins; it rides both rows */}
-              <Box flexDirection="column">
-                <Text dimColor>│</Text>
-                <Text dimColor>│</Text>
-              </Box>
+            // a thin frame around the whole card, dim at rest; the surface
+            // brightens it under the pointer by itself, no hook involved
+            <Box
+              key={`card:${card.id}`}
+              flexDirection="column"
+              width={cardWidth}
+              paddingX={1}
+              borderStyle="round"
+              borderDimColor={!isMe}
+              borderColor={isMe ? 'cyan' : undefined}
+              hover={{ borderDimColor: false, borderColor: 'cyan' }}
+            >
               <Box flexDirection="column" width={inner}>
                 <Box flexDirection="row" justifyContent="space-between">
                   <Box flexDirection="row" gap={1} overflow="hidden">
