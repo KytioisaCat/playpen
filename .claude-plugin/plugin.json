@@ -1,0 +1,6 @@
+{
+  "name": "switchboard",
+  "version": "0.1.0",
+  "description": "A band above the prompt with a card per active Claude Code session: status lamp, short label, latest status, jump and hide.",
+  "author": { "name": "Joel Rönnqvist" }
+}
