@@ -7,7 +7,7 @@ A [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview) that 
   180 tests green               Yes, merge  Wait          relay hooked up
 ```
 
-- **A card exists because you wrote in that session.** It appears at your first prompt there, stays while the session lives and you have written in it within the last 8 hours, and goes when you press ×, close or archive the session, or quit the app. A red card stays until you have dealt with it.
+- **A card exists because you wrote in that session.** It appears at your first prompt there (opening an old session to look something up does not count), stays while the session lives and you have written in it within the last 8 hours, and goes when you press ×, close or archive the session, or quit the app. A red card stays until you have dealt with it.
 - **Lamp**: yellow while Claude works, green when the turn is done, red when the session needs you (a permission dialog or a question), grey when it has ended.
 - **Label**: what the session is about, in at most 18 characters. **Gist**: the state of the latest reply in at most 22 characters. Both are written by a small model in the language of the reply, and cached so each pair is summarized once.
 - **Click the label** to jump to that session. **×** hides the card until you write in that session again.

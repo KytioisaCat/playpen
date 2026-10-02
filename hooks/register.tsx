@@ -482,8 +482,9 @@ export const register: Register = (on, options) => {
     const engineId = await $.session.id()
     const id = self?.sessionId ?? `local_${engineId}`
     const now = await $.clock.now()
-    // a resumed session that already has prompts is one you are working in
-    hasPrompted = (await $.session.turns()) > 0
+    // Nothing is written until you prompt here: opening an old session to
+    // look something up wakes its process, and that alone is not working in it.
+    hasPrompted = false
     me = {
       id,
       engineId,
@@ -497,7 +498,6 @@ export const register: Register = (on, options) => {
       lastPromptAt: now,
       updatedAt: now,
     }
-    await writeMe($)
 
     await $.command.register({ name: 'board', description: 'Show or hide the switchboard band', immediate: true })
 
@@ -525,8 +525,9 @@ export const register: Register = (on, options) => {
   // still means someone wrote here.
   on('turn.start', async ($, e, next) => {
     heldTurnId = e.turnId
+    const isFirst = !hasPrompted
     hasPrompted = true
-    await writeMe($, { state: 'working', suggestion: null })
+    await writeMe($, { state: 'working', suggestion: null, ...(isFirst ? { lastPromptAt: await $.clock.now() } : {}) })
     return next(e)
   })
 
