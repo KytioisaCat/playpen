@@ -1,81 +1,52 @@
 import type { Register, EngineInterface, PluginOptions } from 'claude-code'
 
-// switchboard: a band above the prompt with one card per recent session, and
-// a detail strip under the cards that fills in when you hover one.
+// switchboard: a band above the prompt with one small card per session you
+// are working in right now.
 //
-// Sources, merged per app session id:
-//  1. The desktop app's session list ($.mcp.call on ccd_session_mgmt): title,
-//     cwd, isRunning, lastActivityAt and the claude:// link that opens it.
-//  2. The session's transcript on disk (~/.claude/projects/<cwd>/<id>.jsonl):
-//     the last reply, and a tool call left unanswered, which from the outside
-//     is what a permission dialog or an open question looks like.
-//  3. For a session running this mod, its own exact state, written to
-//     ~/.claude/switchboard/sessions/<id>.json by the hooks below: the open
-//     question with its options, the prompt suggestion, the engine session id
-//     that $.session.send addresses.
-//  4. A small model turns title + last reply into a short label and gist,
-//     cached in $.store so each pair is summarized once.
+// The mod runs in every session, and each session writes one JSON file about
+// itself to ~/.claude/switchboard/sessions/<id>.json: its title and link from
+// the desktop app, its exact state from the hooks below, the open question
+// with its options, the prompt suggestion, and the engine session id that
+// $.session.send addresses. Every session's band reads that folder.
 //
-// Cards keep their place: the order they first appeared in is stored, and a
-// new session is added at the end. Nothing moves when activity changes.
+// A card exists because you wrote in that session. It appears at your first
+// prompt there, stays while the session lives and you have written in it
+// within the window (red ones stay until handled), and goes when you press ×,
+// when the session ends, or when its heartbeat stops. Cards keep the place
+// they first appeared in.
 
 type State = 'working' | 'done' | 'waiting' | 'ended'
 
 type Question = { text: string; options: string[] }
 
-type Card = {
-  id: string // the app's session id (local_...)
-  engineId: string | null // what $.session.id() answers there; the send address
-  title: string
-  label: string
-  gist: string
-  cwd: string
-  link: string
-  state: State
-  snippet: string
-  question: Question | null
-  suggestion: string | null
-  lastActivityAt: number
-  isExact: boolean // the mod runs in that session
-}
-
-type AppSession = {
-  sessionId: string
-  title: string
-  cwd: string
-  isRunning: boolean
-  isArchived: boolean
-  lastActivityAt: string
-  link?: string
-}
-
 type Own = {
-  id: string
-  engineId: string
+  id: string // the app's session id (local_...), the card's identity
+  engineId: string // what $.session.id() answers; the send address
+  title: string
+  link: string
+  cwd: string
   state: State
   snippet: string
   question: Question | null
   suggestion: string | null
+  lastPromptAt: number
   updatedAt: number
 }
 
-type Tail = { path: string; mtimeMs: number; snippet: string; hasPendingTool: boolean; question: Question | null }
+type Card = Own & { label: string; gist: string }
 
 type Mini = { key: string; label: string; gist: string }
 
 const POLL_MS = 3_000
 const HEARTBEAT_MS = 10_000
 const STALE_MS = 45_000
-const CARD_WIDTH = 28
-const DETAIL_ROWS = 4
 const LABEL_MAX = 18
 const GIST_MAX = 22
 const LABEL_ASK = 16
 const GIST_ASK = 20
-const TAIL_BYTES = '80000'
-// a tool call left unanswered this long, in a session without the mod, is
-// read as a dialog; shorter and a slow Bash command looks the same
-const WAITING_IDLE_MS = 20_000
+const PER_ROW = 3
+const MIN_CARD = 24
+const MAX_CARD = 40
 // a message from another switchboard: consumed by the receiving mod and
 // submitted as the person's own prompt there
 const RELAY = '[switchboard] '
@@ -83,6 +54,7 @@ const RELAY = '[switchboard] '
 let home = ''
 let ownDir = ''
 let me: Own | null = null
+let hasPrompted = false
 let heldTurnId: string | null = null
 let deck: Card[] = []
 let lastDeckJson = ''
@@ -92,7 +64,6 @@ let isSummarizing = false
 let hidden: Record<string, number> = {}
 let minis: Record<string, Mini> = {}
 let order: string[] = []
-const tails = new Map<string, Tail>()
 
 // Tool calls in flight and which of them have a dialog up. Several tools can
 // run at once, so one call ending must not clear another call's wait.
@@ -102,15 +73,15 @@ let isPromptUp = false
 
 // --- options -----------------------------------------------------------------
 
-let windowMs = 12 * 60 * 60 * 1000
-let maxCards = 8
+let windowMs = 8 * 60 * 60 * 1000
+let maxCards = 6
 let shouldSummarize = true
 let summaryModel = 'haiku'
 
 function readOptions(options: PluginOptions) {
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && v > 0 ? v : fallback)
-  windowMs = num(options.window_hours, 12) * 60 * 60 * 1000
-  maxCards = Math.min(16, num(options.max_cards, 8))
+  windowMs = num(options.window_hours, 8) * 60 * 60 * 1000
+  maxCards = Math.min(12, num(options.max_cards, 6))
   shouldSummarize = options.summarize !== false
   summaryModel = typeof options.model === 'string' && options.model ? options.model : 'haiku'
 }
@@ -119,7 +90,7 @@ function readOptions(options: PluginOptions) {
 
 const trim = (s: string, n: number) => {
   const flat = s.replace(/\s+/g, ' ').trim()
-  return flat.length > n ? flat.slice(0, n - 1) + '…' : flat
+  return flat.length > n ? flat.slice(0, Math.max(1, n - 1)) + '…' : flat
 }
 
 const lampColor = (state: State) =>
@@ -148,10 +119,22 @@ async function init($: EngineInterface) {
   order = ((await $.store.get('order')) as string[] | undefined) ?? []
 }
 
-// --- this session's own exact state ---------------------------------------
+// --- this session's own file --------------------------------------------------
+
+// The app knows this session's id, title and link; the engine's own id is the
+// transcript's name and differs after a resume.
+async function selfApp($: EngineInterface): Promise<{ sessionId?: string; title?: string; link?: string } | null> {
+  try {
+    const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
+    if (r.isError) return null
+    return JSON.parse(mcpText(r)) as { sessionId?: string; title?: string; link?: string }
+  } catch {
+    return null
+  }
+}
 
 async function writeMe($: EngineInterface, patch: Partial<Own> = {}) {
-  if (!me) return
+  if (!me || !hasPrompted) return
   me = { ...me, ...patch, updatedAt: await $.clock.now() }
   try {
     await $.fs.write(`${ownDir}/${me.id}.json`, JSON.stringify(me))
@@ -163,13 +146,28 @@ async function writeMe($: EngineInterface, patch: Partial<Own> = {}) {
 const settle = ($: EngineInterface) =>
   writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
 
-async function readOwn($: EngineInterface): Promise<Map<string, Own>> {
-  const own = new Map<string, Own>()
+async function mySnippet($: EngineInterface) {
+  const last = [...(await $.session.messages())].reverse().find(m => m.role === 'assistant' && m.text.trim())
+  return last ? trim(last.text, 80) : ''
+}
+
+// The heartbeat: proves the session is alive, and picks up a title the app
+// gave the session after its first prompt.
+async function heartbeat($: EngineInterface) {
+  if (!me || !hasPrompted) return
+  const self = await selfApp($)
+  await writeMe($, self?.title ? { title: self.title } : {})
+}
+
+// --- every session's file -----------------------------------------------------
+
+async function readAll($: EngineInterface): Promise<Own[]> {
+  const all = new Map<string, Own>()
   let entries: { name: string; kind: string }[] = []
   try {
     entries = await $.fs.list(ownDir)
   } catch {
-    return own
+    return me && hasPrompted ? [me] : []
   }
   const now = await $.clock.now()
   for (const entry of entries) {
@@ -178,118 +176,13 @@ async function readOwn($: EngineInterface): Promise<Map<string, Own>> {
       const o = JSON.parse(await $.fs.read(`${ownDir}/${entry.name}`)) as Own
       // a process that died mid-turn never wrote 'ended'; the heartbeat tells
       if (o.state !== 'ended' && now - o.updatedAt > STALE_MS) o.state = 'ended'
-      own.set(o.id, o)
+      all.set(o.id, o)
     } catch {
       // half-written file: skip it this round
     }
   }
-  if (me) own.set(me.id, me)
-  return own
-}
-
-async function mySnippet($: EngineInterface) {
-  const last = [...(await $.session.messages())].reverse().find(m => m.role === 'assistant' && m.text.trim())
-  return last ? trim(last.text, 80) : ''
-}
-
-// --- the app's session list -----------------------------------------------
-
-async function listApp($: EngineInterface): Promise<AppSession[]> {
-  try {
-    const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 25 })
-    if (r.isError) return []
-    return JSON.parse(mcpText(r)) as AppSession[]
-  } catch {
-    return []
-  }
-}
-
-async function selfApp($: EngineInterface): Promise<AppSession | null> {
-  try {
-    const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
-    if (r.isError) return null
-    return JSON.parse(mcpText(r)) as AppSession
-  } catch {
-    return null
-  }
-}
-
-// --- transcripts on disk ----------------------------------------------------
-
-const projectDir = (cwd: string) => `${home}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}`
-
-// The transcript of an app session: the file named by its id when there is
-// one, else the .jsonl in its project folder whose mtime sits closest to the
-// app's last activity (several sessions share a cwd).
-async function pickTranscript($: EngineInterface, s: AppSession): Promise<{ path: string; mtimeMs: number } | null> {
-  const dir = projectDir(s.cwd)
-  let entries: { name: string; kind: string; mtimeMs: number }[]
-  try {
-    entries = await $.fs.list(dir)
-  } catch {
-    return null
-  }
-  const named = entries.find(e => e.name === `${s.sessionId.replace(/^local_/, '')}.jsonl`)
-  if (named) return { path: `${dir}/${named.name}`, mtimeMs: named.mtimeMs }
-
-  const at = Date.parse(s.lastActivityAt)
-  let best: { path: string; mtimeMs: number } | null = null
-  let bestGap = Infinity
-  for (const e of entries) {
-    if (e.kind !== 'file' || !e.name.endsWith('.jsonl')) continue
-    const gap = Math.abs(e.mtimeMs - at)
-    if (gap < bestGap) {
-      bestGap = gap
-      best = { path: `${dir}/${e.name}`, mtimeMs: e.mtimeMs }
-    }
-  }
-  return best
-}
-
-async function readTail($: EngineInterface, s: AppSession): Promise<Tail | null> {
-  const picked = await pickTranscript($, s)
-  if (!picked) return null
-  const cached = tails.get(s.sessionId)
-  if (cached && cached.path === picked.path && cached.mtimeMs === picked.mtimeMs) return cached
-
-  let stdout = ''
-  try {
-    // $.fs.read refuses files over 4 MiB, and long sessions pass that
-    const r = await $.process.run(['tail', '-c', TAIL_BYTES, picked.path], { timeoutMs: 5_000 })
-    stdout = r.stdout
-  } catch {
-    return cached ?? null
-  }
-
-  let snippet = ''
-  const pending = new Map<string, { name: string; input: unknown }>()
-  const lines = stdout.split('\n').slice(1) // the first line is cut mid-record
-  for (const line of lines) {
-    if (!line.trim()) continue
-    let r: { type?: string; message?: { content?: unknown } }
-    try {
-      r = JSON.parse(line)
-    } catch {
-      continue
-    }
-    const content = r.message?.content
-    if (!Array.isArray(content)) continue
-    for (const block of content as { type: string; text?: string; id?: string; name?: string; input?: unknown; tool_use_id?: string }[]) {
-      if (r.type === 'assistant' && block.type === 'text' && block.text?.trim()) snippet = block.text
-      if (r.type === 'assistant' && block.type === 'tool_use' && block.id) pending.set(block.id, { name: block.name ?? '', input: block.input })
-      if (r.type === 'user' && block.type === 'tool_result' && block.tool_use_id) pending.delete(block.tool_use_id)
-    }
-  }
-  const ask = [...pending.values()].find(p => p.name === 'AskUserQuestion')
-  const tail: Tail = {
-    path: picked.path,
-    mtimeMs: picked.mtimeMs,
-    snippet: trim(snippet, 80),
-    hasPendingTool: pending.size > 0,
-    question: ask ? toQuestion(ask.input) : null,
-  }
-  tails.set(s.sessionId, tail)
-  return tail
+  if (me && hasPrompted) all.set(me.id, me)
+  return [...all.values()]
 }
 
 // --- short labels from a small model ----------------------------------------
@@ -337,62 +230,22 @@ async function summarizeNext($: EngineInterface) {
   }
 }
 
-// --- merging into cards -----------------------------------------------------
+// --- the deck -------------------------------------------------------------------
 
 async function buildDeck($: EngineInterface): Promise<Card[]> {
   const now = await $.clock.now()
-  const own = await readOwn($)
-  const sessions = await listApp($)
-  const self = await selfApp($)
-  if (self) sessions.unshift({ ...self, isRunning: true, lastActivityAt: new Date(now).toISOString() })
-
   const cards: Card[] = []
-  for (const s of sessions) {
-    if (s.isArchived) continue
-    const at = Date.parse(s.lastActivityAt)
-    if (!s.isRunning && now - at > windowMs) continue
-    const hiddenAt = hidden[s.sessionId]
-    if (hiddenAt !== undefined && at <= hiddenAt) continue
-
-    const link = s.link ?? `claude://claude.ai/epitaxy/${s.sessionId}`
-    const exact = own.get(s.sessionId)
-    let state: State
-    let snippet = ''
-    let question: Question | null = null
-    let suggestion: string | null = null
-    let engineId: string | null = null
-    if (exact) {
-      state = exact.state
-      snippet = exact.snippet
-      question = exact.question
-      suggestion = exact.suggestion
-      engineId = exact.engineId
-    } else {
-      const tail = await readTail($, s)
-      snippet = tail?.snippet ?? ''
-      question = tail?.question ?? null
-      engineId = tail ? (tail.path.split('/').pop() ?? '').replace(/\.jsonl$/, '') || null : null
-      const idleMs = tail ? now - tail.mtimeMs : Infinity
-      if (tail?.hasPendingTool && idleMs > WAITING_IDLE_MS) state = 'waiting'
-      else if (s.isRunning || idleMs < 15_000) state = 'working'
-      else state = 'done'
-    }
-    const title = s.title || 'Untitled session'
-    const mini = minis[s.sessionId]
+  for (const o of await readAll($)) {
+    if (o.state === 'ended') continue
+    const hiddenAt = hidden[o.id]
+    if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
+    // a red card stays until handled; the others fall off after the window
+    if (o.state !== 'waiting' && now - o.lastPromptAt > windowMs) continue
+    const mini = minis[o.id]
     cards.push({
-      id: s.sessionId,
-      engineId,
-      title,
-      label: mini?.label ?? trim(title, LABEL_MAX),
-      gist: mini?.gist ?? trim(snippet, GIST_MAX),
-      cwd: s.cwd,
-      link,
-      state,
-      snippet,
-      question,
-      suggestion,
-      lastActivityAt: at,
-      isExact: !!exact,
+      ...o,
+      label: mini?.label ?? trim(o.title, LABEL_MAX),
+      gist: mini?.gist ?? trim(o.snippet, GIST_MAX),
     })
   }
 
@@ -434,9 +287,9 @@ async function jump($: EngineInterface, card: Card) {
   }
 }
 
-// × hides the card until that session shows new activity
+// × hides the card until you write in that session again
 async function hide($: EngineInterface, card: Card) {
-  hidden = { ...hidden, [card.id]: card.lastActivityAt }
+  hidden = { ...hidden, [card.id]: card.lastPromptAt }
   await $.store.set('hidden', hidden)
   await refresh($)
 }
@@ -444,10 +297,6 @@ async function hide($: EngineInterface, card: Card) {
 // Sends text to a session that runs this mod; its session.receive hook takes
 // the relay, ends any wait and submits the text as the person's own prompt.
 async function relay($: EngineInterface, card: Card, text: string) {
-  if (!card.engineId) {
-    $.ui.toast('No address for that session yet')
-    return
-  }
   const sent = await $.session.send({ to: { sessionId: card.engineId }, text: RELAY + text })
   $.ui.toast(sent.isDelivered ? `Sent to ${card.label}: ${trim(text, 40)}` : `Not delivered: ${sent.reason}`)
 }
@@ -462,13 +311,28 @@ export const register: Register = (on, options) => {
     const self = await selfApp($)
     const engineId = await $.session.id()
     const id = self?.sessionId ?? `local_${engineId}`
-    me = { id, engineId, state: 'done', snippet: await mySnippet($), question: null, suggestion: null, updatedAt: await $.clock.now() }
-    if ((await $.session.turns()) > 0) await writeMe($)
+    const now = await $.clock.now()
+    // a resumed session that already has prompts is one you are working in
+    hasPrompted = (await $.session.turns()) > 0
+    me = {
+      id,
+      engineId,
+      title: self?.title ?? 'Untitled session',
+      link: self?.link ?? `claude://claude.ai/epitaxy/${id}`,
+      cwd: e.cwd,
+      state: 'done',
+      snippet: await mySnippet($),
+      question: null,
+      suggestion: null,
+      lastPromptAt: now,
+      updatedAt: now,
+    }
+    await writeMe($)
 
     await $.command.register({ name: 'board', description: 'Show or hide the switchboard band', immediate: true })
 
     $.clock.every(POLL_MS, () => void refresh($))
-    $.clock.every(HEARTBEAT_MS, () => void writeMe($))
+    $.clock.every(HEARTBEAT_MS, () => void heartbeat($))
     void refresh($)
 
     return next(e)
@@ -480,8 +344,10 @@ export const register: Register = (on, options) => {
     return {}
   })
 
+  // Your first prompt is what puts this session on the board.
   on('prompt.submit', async ($, e, next) => {
-    await writeMe($, { state: 'working', suggestion: null })
+    hasPrompted = true
+    await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now() })
     return next(e)
   })
 
@@ -590,110 +456,54 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const columns = e.props.bodyColumns
-    const detailWidth = Math.max(40, Math.min(columns, 100))
+    // three cards across; each is two rows: the lamp, label and ×, then the gist
+    const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)))
+    const inner = cardWidth - 1
+    const labelMax = Math.max(8, inner - 4)
 
     return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          {deck.map(card => {
-            const isMe = me !== null && card.id === me.id
-            return (
-              <Box
-                key={`card:${card.id}`}
-                hover={{ scope: `sb:${card.id}` }}
-                flexDirection="column"
-                width={CARD_WIDTH}
-                borderStyle="round"
-                borderColor={isMe ? 'cyan' : undefined}
-                borderDimColor={!isMe}
-                paddingX={1}
-              >
-                <Box flexDirection="row" justifyContent="space-between">
-                  <Box flexDirection="row" gap={1} overflow="hidden">
-                    <Text color={lampColor(card.state)}>●</Text>
-                    <Button
-                      key={`jump:${card.id}`}
-                      plain
-                      label={card.label}
-                      onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
-                    />
-                  </Box>
-                  <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
-                </Box>
-                {card.state === 'waiting' ? (
-                  <Text color="red">{card.question ? 'asks you' : 'needs you'}</Text>
-                ) : (
-                  <Text dimColor wrap="truncate-end">
-                    {card.gist || stateWord(card.state)}
-                  </Text>
-                )}
-              </Box>
-            )
-          })}
-        </Box>
-
-        {/* The detail strip: the same height always; a hovered card fills it. */}
-        <Box key="detail" height={DETAIL_ROWS} width={detailWidth} flexDirection="column" paddingX={1}>
-          <Text dimColor>
-            <Text color="yellow">●</Text> working <Text color="green">●</Text> done <Text color="red">●</Text> needs you{' '}
-            <Text color="gray">●</Text> ended · hover a card for details, click its name to go there
-          </Text>
-          {deck.map(card => {
-            const canRelay = card.isExact && card.engineId !== null && !(me && card.id === me.id)
-            return (
-              <Box
-                key={`detail:${card.id}`}
-                position="absolute"
-                top={0}
-                left={0}
-                width={detailWidth}
-                height={DETAIL_ROWS}
-                display="none"
-                hover={{ scope: `sb:${card.id}`, display: 'flex' }}
-                flexDirection="column"
-                paddingX={1}
-                borderStyle="round"
-                borderColor={lampColor(card.state)}
-              >
-                <Box flexDirection="row" gap={1}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+        {deck.map(card => {
+          const isMe = me !== null && card.id === me.id
+          const canRelay = !isMe && card.question !== null && card.question.options.length > 0
+          return (
+            <Box key={`card:${card.id}`} flexDirection="column" width={cardWidth}>
+              <Box flexDirection="row" justifyContent="space-between">
+                <Box flexDirection="row" gap={1} overflow="hidden">
                   <Text color={lampColor(card.state)}>●</Text>
-                  <Text bold wrap="truncate-end">
-                    {card.title}
-                  </Text>
-                  <Text dimColor>{stateWord(card.state)}</Text>
+                  <Button
+                    key={`jump:${card.id}`}
+                    plain
+                    label={trim(card.label, labelMax)}
+                    onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
+                  />
                 </Box>
-                {card.question ? (
-                  <Box flexDirection="row" gap={1} flexWrap="wrap">
-                    <Text wrap="truncate-end">{trim(card.question.text, detailWidth - 4)}</Text>
-                    {canRelay
-                      ? card.question.options.map(label => (
-                          <Button key={`answer:${card.id}:${label}`} label={label} onPress={() => void relay($, card, label)} />
-                        ))
-                      : card.question.options.length > 0 && <Text dimColor>open the session to answer</Text>}
-                  </Box>
-                ) : (
-                  <Text dimColor wrap="truncate-end">
-                    {card.snippet || stateWord(card.state)}
-                  </Text>
-                )}
-                {!card.question && card.suggestion && canRelay && (
-                  <Box flexDirection="row" gap={1}>
-                    <Button
-                      key={`suggest:${card.id}`}
-                      variant="primary"
-                      label="Send suggestion"
-                      onPress={() => void relay($, card, card.suggestion ?? '')}
-                    />
-                    <Text dimColor wrap="truncate-end">
-                      {trim(card.suggestion, detailWidth - 22)}
-                    </Text>
-                  </Box>
-                )}
+                <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
               </Box>
-            )
-          })}
-        </Box>
+              {canRelay && card.question ? (
+                <Box flexDirection="row" gap={1} overflow="hidden">
+                  {card.question.options.slice(0, 2).map(label => (
+                    <Button
+                      key={`answer:${card.id}:${label}`}
+                      plain
+                      label={trim(label, Math.floor(inner / 2) - 1)}
+                      onPress={() => void relay($, card, label)}
+                    />
+                  ))}
+                  {card.question.options.length > 2 && <Text dimColor>…</Text>}
+                </Box>
+              ) : card.state === 'waiting' ? (
+                <Text color="red" wrap="truncate-end">
+                  {card.question ? trim(card.question.text, inner) : 'needs you'}
+                </Text>
+              ) : (
+                <Text dimColor wrap="truncate-end">
+                  {card.gist || stateWord(card.state)}
+                </Text>
+              )}
+            </Box>
+          )
+        })}
       </Box>
     )
   })

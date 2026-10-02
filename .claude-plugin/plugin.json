@@ -1,7 +1,7 @@
 {
   "name": "switchboard",
-  "version": "0.2.0",
-  "description": "Your other Claude Code sessions as cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
+  "version": "0.3.0",
+  "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": { "name": "Joel Rönnqvist" },
   "repository": "https://github.com/KytioisaCat/switchboard",
   "license": "MIT",
@@ -9,19 +9,19 @@
   "userConfig": {
     "window_hours": {
       "type": "number",
-      "title": "Hours of history",
-      "description": "Show sessions active within this many hours. Running sessions always show.",
-      "default": 12,
+      "title": "Hours on the board",
+      "description": "A card stays this many hours after you last wrote in its session. A red card stays until handled.",
+      "default": 8,
       "min": 1,
       "max": 168
     },
     "max_cards": {
       "type": "number",
       "title": "Maximum cards",
-      "description": "How many session cards the band shows at most.",
-      "default": 8,
+      "description": "How many cards the band shows at most, three per row.",
+      "default": 6,
       "min": 1,
-      "max": 16
+      "max": 12
     },
     "summarize": {
       "type": "boolean",
