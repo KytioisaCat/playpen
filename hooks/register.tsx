@@ -12,8 +12,12 @@ import type { Register, EngineInterface, PluginOptions } from 'claude-code'
 // A card exists because you wrote in that session. It appears at your first
 // prompt there, stays while the session lives and you have written in it
 // within the window (red ones stay until handled), and goes when you press ×,
-// when the session ends, or when its heartbeat stops. Cards keep the place
-// they first appeared in.
+// when the session ends, or when its heartbeat stops.
+//
+// A place on the board belongs to a project, not a session: the first card of
+// a folder takes the next free place, and a later session in the same folder
+// sits with it. So a hand-off, which starts a fresh session in the same folder
+// with a brief the old one wrote, lands where the old card was.
 
 type State = 'working' | 'done' | 'waiting' | 'ended'
 
@@ -31,6 +35,7 @@ type Own = {
   suggestion: string | null
   lastPromptAt: number
   updatedAt: number
+  isRetired?: boolean // handed off to a new session; off the board for good
 }
 
 type Card = Own & { label: string; gist: string }
@@ -47,15 +52,23 @@ const GIST_ASK = 20
 const PER_ROW = 3
 const MIN_CARD = 24
 const MAX_CARD = 40
-// a message from another switchboard: consumed by the receiving mod and
-// submitted as the person's own prompt there
+// a message from another switchboard: consumed by the receiving mod, and
+// either submitted as the person's own prompt there or, for HANDOFF, acted on
 const RELAY = '[switchboard] '
+const HANDOFF = 'handoff'
+
+const HANDOFF_ASK =
+  'Summarize our work and conversation so far so it can be handed to a new session with a fresh context: ' +
+  'the goal, what has been done, the decisions made and why, the current state of the code or files, ' +
+  'open problems, and the next steps. Write it as a brief for someone who has not seen this conversation. ' +
+  'Reply with the brief only.'
 
 let home = ''
 let ownDir = ''
 let me: Own | null = null
 let hasPrompted = false
 let heldTurnId: string | null = null
+let isHandingOff = false
 let deck: Card[] = []
 let lastDeckJson = ''
 let isCollapsed = false
@@ -63,7 +76,8 @@ let isPolling = false
 let isSummarizing = false
 let hidden: Record<string, number> = {}
 let minis: Record<string, Mini> = {}
-let order: string[] = []
+let slots: string[] = [] // folders, in the order their first card appeared
+let order: string[] = [] // session ids, in the order they first appeared
 
 // Tool calls in flight and which of them have a dialog up. Several tools can
 // run at once, so one call ending must not clear another call's wait.
@@ -119,6 +133,7 @@ async function init($: EngineInterface) {
   ownDir = `${home}/.claude/switchboard/sessions`
   hidden = ((await $.store.get('hidden')) as Record<string, number> | undefined) ?? {}
   minis = ((await $.store.get('minis-v2')) as Record<string, Mini> | undefined) ?? {}
+  slots = ((await $.store.get('slots')) as string[] | undefined) ?? []
   order = ((await $.store.get('order')) as string[] | undefined) ?? []
 }
 
@@ -146,12 +161,15 @@ async function writeMe($: EngineInterface, patch: Partial<Own> = {}) {
   }
 }
 
-const settle = ($: EngineInterface) => writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
+const settle = ($: EngineInterface) =>
+  writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
 
-async function mySnippet($: EngineInterface) {
+async function lastReply($: EngineInterface) {
   const last = [...(await $.session.messages())].reverse().find(m => m.role === 'assistant' && m.text.trim())
-  return last ? trim(last.text, 80) : ''
+  return last ? last.text.trim() : ''
 }
+
+const mySnippet = async ($: EngineInterface) => trim(await lastReply($), 80)
 
 // The heartbeat: proves the session is alive, and picks up a title the app
 // gave the session after its first prompt.
@@ -238,7 +256,7 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
   const now = await $.clock.now()
   const cards: Card[] = []
   for (const o of await readAll($)) {
-    if (o.state === 'ended') continue
+    if (o.state === 'ended' || o.isRetired) continue
     const hiddenAt = hidden[o.id]
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
     // a red card stays until handled; the others fall off after the window
@@ -251,13 +269,20 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     })
   }
 
-  // keep each card where it first appeared; a new one goes last
+  // a folder keeps its place; within it, sessions keep the order they came in
+  const newSlots = cards.map(c => c.cwd).filter((cwd, i, all) => !slots.includes(cwd) && all.indexOf(cwd) === i)
+  if (newSlots.length > 0) {
+    slots = [...slots, ...newSlots].slice(-32)
+    await $.store.set('slots', slots)
+  }
   const fresh = cards.map(c => c.id).filter(id => !order.includes(id))
   if (fresh.length > 0) {
     order = [...order, ...fresh].slice(-64)
     await $.store.set('order', order)
   }
-  cards.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+  cards.sort(
+    (a, b) => slots.indexOf(a.cwd) - slots.indexOf(b.cwd) || order.indexOf(a.id) - order.indexOf(b.id),
+  )
   return cards.slice(0, maxCards)
 }
 
@@ -301,6 +326,77 @@ async function hide($: EngineInterface, card: Card) {
 async function relay($: EngineInterface, card: Card, text: string) {
   const sent = await $.session.send({ to: { sessionId: card.engineId }, text: RELAY + text })
   $.ui.toast(sent.isDelivered ? `Sent to ${card.label}: ${trim(text, 40)}` : `Not delivered: ${sent.reason}`)
+}
+
+// --- hand-off: this session writes a brief, a fresh one starts from it -------
+
+// Step one, in the session being handed off: ask for the brief. The turn
+// that answers it finishes the job in finishHandoff.
+async function startHandoff($: EngineInterface) {
+  if (isHandingOff) return
+  isHandingOff = true
+  $.ui.toast('Hand-off: writing the brief…')
+  if (heldTurnId) {
+    try {
+      await $.turn.abort({ turnId: heldTurnId })
+    } catch {
+      // the turn had already ended; the prompt below runs when idle
+    }
+  }
+  void $.prompt.submit({ text: HANDOFF_ASK, asUser: true })
+}
+
+// Step two: start a fresh session in the same folder with the brief as its
+// first prompt, let it stand on its own in the sidebar, and retire this card.
+// The new session's card takes this folder's place on the board.
+async function finishHandoff($: EngineInterface) {
+  if (!me) return
+  const brief = await lastReply($)
+  if (!brief) {
+    isHandingOff = false
+    $.ui.toast('Hand-off: no brief was written')
+    return
+  }
+  try {
+    const r = await $.mcp.call('ccd_session', 'start_session', {
+      initiation: 'user_asked',
+      context: 'fresh',
+      title: trim(me.title.replace(/ \(continued\)$/, ''), 50) + ' (continued)',
+      prompt: `This session continues an earlier one in the same folder. Brief from the previous session:\n\n${brief}\n\nPick up from the next steps.`,
+      background:
+        `Started by the switchboard mod as a hand-off from the session "${me.title}" in ${me.cwd}, ` +
+        'whose context was getting long. The prompt is the brief that session wrote about its own work; ' +
+        'treat it as the whole history.',
+      use_worktree: false,
+    })
+    const text = mcpText(r)
+    if (r.isError) throw new Error(text)
+    const newId = text.match(/local_[0-9a-f-]+/)?.[0]
+    if (newId) {
+      // off the parent's thread in the sidebar: it is a continuation, not a side task
+      try {
+        await $.mcp.call('ccd_session_mgmt', 'detach_session', { session_id: newId })
+      } catch {
+        // stays nested; the board does not care
+      }
+    }
+    await writeMe($, { isRetired: true })
+    $.ui.toast('Handed off to a new session; this card retires')
+    void jumpTo($, newId)
+  } catch (error) {
+    $.ui.toast(`Hand-off failed: ${trim(String(error), 60)}`)
+  } finally {
+    isHandingOff = false
+  }
+}
+
+async function jumpTo($: EngineInterface, appId: string | undefined) {
+  if (!appId) return
+  try {
+    await $.process.run(['open', `claude://claude.ai/epitaxy/${appId}`])
+  } catch {
+    // the new session is in the sidebar either way
+  }
 }
 
 // --- the band -----------------------------------------------------------------
@@ -353,8 +449,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A turn that starts without prompt.submit (a session started with a brief)
+  // still means someone wrote here.
   on('turn.start', async ($, e, next) => {
     heldTurnId = e.turnId
+    hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null })
     return next(e)
   })
@@ -427,12 +526,17 @@ export const register: Register = (on, options) => {
   })
 
   // A relay from another switchboard: never shown to Claude as a message.
-  // If a question is open here, the turn is ended first, so the text answers
-  // it as a fresh prompt instead of queueing behind the dialog.
+  // HANDOFF starts the hand-off here; any other text answers an open question
+  // or runs as a prompt, the waiting turn ended first so it does not queue
+  // behind the dialog.
   on('session.receive', async ($, e, next) => {
     if (!e.text.startsWith(RELAY) || e.agentId !== undefined) return next(e)
     const text = e.text.slice(RELAY.length).trim()
     if (!text) return { consumed: 'empty switchboard relay' }
+    if (text === HANDOFF) {
+      void startHandoff($)
+      return { consumed: 'switchboard hand-off started' }
+    }
     if (heldTurnId && (me?.question || me?.state === 'waiting')) {
       try {
         await $.turn.abort({ turnId: heldTurnId })
@@ -452,6 +556,8 @@ export const register: Register = (on, options) => {
     isPromptUp = false
     await writeMe($, { state: 'done', question: null, snippet: await mySnippet($) })
     void refresh($)
+    // the turn that wrote the brief: start the new session from it
+    if (isHandingOff) void finishHandoff($)
     return next(e)
   })
 
@@ -463,13 +569,14 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    // three cards across; each is two rows inside a thin frame: the lamp, label and ×, then the gist
+    // three cards across; each is two rows inside a thin frame: the lamp,
+    // label, hand-off and ×, then the gist
     const cardWidth = Math.max(
       MIN_CARD,
       Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)),
     )
     const inner = cardWidth - 4 // less the frame and its padding
-    const labelMax = Math.max(8, inner - 4)
+    const labelMax = Math.max(8, inner - 6)
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
@@ -477,8 +584,8 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const canRelay = !isMe && card.question !== null && card.question.options.length > 0
           return (
-            // a thin frame around the whole card: dim, full strength on this session, and the surface
-            // brightens it under the pointer by itself, no hook involved
+            // a thin frame around the whole card: dim, full strength on this
+            // session, and the surface brightens it under the pointer by itself
             <Box
               key={`card:${card.id}`}
               flexDirection="column"
@@ -499,7 +606,16 @@ export const register: Register = (on, options) => {
                       onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
                     />
                   </Box>
-                  <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
+                  <Box flexDirection="row" gap={1}>
+                    <Button
+                      key={`handoff:${card.id}`}
+                      plain
+                      dimColor
+                      label="⇢"
+                      onPress={() => void (isMe ? startHandoff($) : relay($, card, HANDOFF))}
+                    />
+                    <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
+                  </Box>
                 </Box>
                 {canRelay && card.question ? (
                   <Box flexDirection="row" gap={1} overflow="hidden">
