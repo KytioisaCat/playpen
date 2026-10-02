@@ -424,6 +424,39 @@ function pressAnswer($: EngineInterface, card: Card) {
   }
 }
 
+// When the engine's own suggestion service says nothing within a moment of
+// the turn ending, and the reply ends on a question or an offer, write the
+// reply the person would most likely send to accept it, so ↩ has something.
+async function suggestFallback($: EngineInterface, reply: string) {
+  if (!shouldSummarize || !me || !hasPrompted) return
+  const tail = reply.slice(-400)
+  if (!/\?/.test(tail)) return
+  const turnEndedAt = me.updatedAt
+  $.clock.after(2_500, () => {
+    void (async () => {
+      if (!me || me.suggestion || me.state !== 'done' || me.lastPromptAt > turnEndedAt) return
+      try {
+        const r = await $.model.complete({
+          model: summaryModel,
+          effort: 'low',
+          maxTokens: 60,
+          timeoutMs: 10_000,
+          system:
+            'An assistant just ended its reply with a question or an offer. Write the one short message the person ' +
+            'would most likely send back to accept it and let the work continue. Same language as the reply. ' +
+            'One line, no quotes, no explanation.',
+          prompt: tail,
+        })
+        if (r.isAnswered && r.text.trim() && me.state === 'done' && !me.suggestion) {
+          await writeMe($, { suggestion: trim(r.text, 200) })
+        }
+      } catch {
+        // no suggestion then; ↩ says so
+      }
+    })()
+  })
+}
+
 // --- hand-off: this session writes a brief, a fresh one starts from it -------
 
 // Step one, in the session being handed off: ask for the brief. The turn
@@ -578,9 +611,10 @@ export const register: Register = (on, options) => {
   // The dim suggestion in the prompt box: what another switchboard can send
   // on your behalf with one press.
   on('prompt.suggest', async ($, e, next) => {
-    const shown = await next(e)
-    if (shown.isShown) await writeMe($, { suggestion: e.text })
-    return shown
+    // recorded whether or not the box could show it: in the desktop app the
+    // box is the app's own, and the engine may answer that it did not show
+    if (e.text.trim()) await writeMe($, { suggestion: e.text.trim() })
+    return next(e)
   })
 
   // Fires only when a permission dialog is actually put to the person; in
@@ -664,10 +698,12 @@ export const register: Register = (on, options) => {
     inFlight.clear()
     waitingIds.clear()
     isPromptUp = false
-    await writeMe($, { state: 'done', question: null, snippet: await mySnippet($) })
+    const reply = await lastReply($)
+    await writeMe($, { state: 'done', question: null, snippet: trim(reply, 80) })
     void refresh($)
     // the turn that wrote the brief: start the new session from it
     if (isHandingOff) void finishHandoff($)
+    else void suggestFallback($, reply)
     return next(e)
   })
 
