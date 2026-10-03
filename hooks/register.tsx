@@ -487,22 +487,23 @@ async function startHandoff($: EngineInterface) {
 }
 
 // A hand-off started through the app's link leaves this marker; the new
-// session in that folder picks it up at start and sends the opener itself.
+// session in that folder picks it up at start and takes the previous
+// session's model. The opener itself arrives through the link, sent by the
+// person's Enter: the app creates the session only then, so the mod cannot
+// send it first, and must not send it again.
 const pendingPath = () => `${home}/.claude/switchboard/handoff/pending.json`
-const PENDING_MS = 3 * 60 * 1000
+const PENDING_MS = 10 * 60 * 1000
 
 async function takePendingHandoff($: EngineInterface, cwd: string) {
   try {
     if (!(await $.fs.exists(pendingPath()))) return
     const pending = JSON.parse(await $.fs.read(pendingPath())) as {
       cwd?: string
-      opener?: string
       model?: string
       at?: number
     }
     const now = await $.clock.now()
-    if (pending.cwd !== cwd || !pending.opener || !pending.at || now - pending.at > PENDING_MS) return
-    if ((await $.session.messages()).length > 0) return
+    if (pending.cwd !== cwd || !pending.at || now - pending.at > PENDING_MS) return
     await $.fs.write(pendingPath(), '{}')
     // the previous session's model, where the app started this one on its default
     if (pending.model && pending.model !== (await $.session.model())) {
@@ -527,10 +528,9 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
       }
       $.ui.log(`hand-off: model ${isSet ? 'set to' : 'left at default, wanted'} ${wanted}`)
     }
-    $.ui.log('hand-off: continuing from the brief the previous session wrote')
-    void $.prompt.submit({ text: pending.opener, asUser: true })
+    $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
-    // an unreadable marker: the opener is on the clipboard, paste it
+    // an unreadable marker: the model stays the app's choice
   }
 }
 
@@ -556,7 +556,9 @@ async function finishHandoff($: EngineInterface) {
   const title = me.title.replace(/ \(continued\)$/, '')
   const stamp = new Date(await $.clock.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'
-  const briefPath = `${home}/.claude/switchboard/handoff/${stamp}-${slug}.md`
+  // inside the project, under its .claude folder: a file there is read
+  // without a permission prompt, one outside the working directory is not
+  const briefPath = `${me.cwd}/.claude/switchboard/handoff-${stamp}-${slug}.md`
   try {
     await $.fs.write(
       briefPath,
@@ -566,12 +568,10 @@ async function finishHandoff($: EngineInterface) {
     $.ui.log(`hand-off: could not save the brief: ${trim(String(error), 200)}`)
   }
   $.ui.log(`hand-off: brief of ${brief.length} characters saved to ${briefPath}`)
-  // the brief rides in the prompt itself: no file to read, so no permission
-  // prompt about a path outside the project
+  // short, because it rides in the link that opens the new session
   const opener =
     `Continue the work handed off from the session "${title}" in this folder. ` +
-    'The brief below, written by that session, is the whole history. Pick up from its next steps.\n\n' +
-    `---\n\n${brief}`
+    `Read the brief at ${briefPath} first; it is the whole history. Then pick up from its next steps.`
 
   let started = ''
   try {
@@ -602,10 +602,11 @@ async function finishHandoff($: EngineInterface) {
     started = 'through start_session'
   } catch (error) {
     $.ui.log(`hand-off: start_session is not available here (${trim(String(error), 120)}); opening the app's new-session link`)
-    // The link opens the new session on this folder with an empty box. The
-    // new session's own switchboard finds this marker at start, sets the
-    // model and sends the opener, so nothing is typed or pressed. The opener
-    // also goes to the clipboard, for a session whose switchboard misses it.
+    // The link opens the app's new-session page on this folder with the
+    // opener filled in. The app creates the session only when that prompt is
+    // sent, so one Enter is the person's; nothing else is. The new session's
+    // own switchboard finds this marker at start and sets this session's
+    // model there, where the app started it on another.
     let model = ''
     try {
       model = await $.session.model()
@@ -613,16 +614,11 @@ async function finishHandoff($: EngineInterface) {
       // the new session keeps the app's default
     }
     try {
-      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, opener, model, briefPath, at: await $.clock.now() }))
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, at: await $.clock.now() }))
     } catch {
-      // then the opener is pasted from the clipboard
+      // the model is then the app's choice
     }
-    try {
-      await $.ui.copy({ text: opener })
-    } catch {
-      // the brief is in the file either way
-    }
-    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}`
+    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}&q=${encodeURIComponent(opener)}`
     try {
       const r = await $.process.run(['open', url])
       if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
