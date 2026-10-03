@@ -786,14 +786,22 @@ export const register: Register = (on, options) => {
     // card itself, so the band already has that height, and its popover under
     // the pointer is the same content wide. Any card shows the popover while
     // open with ↩; rows are reserved under the cards only then.
-    const asksInCard = (card: Card) => card.state === 'waiting' && card.question !== null
-    const hasPopover = (card: Card) => openId === card.id || asksInCard(card)
+    // The desktop app draws the popover over the transcript above the band
+    // and clips nothing, so there the cards stay two rows and no space is
+    // kept. The terminal clips at the band's edge: there a red card shows its
+    // question in the card, and rows are reserved while a card is open.
+    const isTerminal = e.surface === 'terminal'
+    const asks = (card: Card) => card.state === 'waiting' && card.question !== null
+    const asksInCard = (card: Card) => isTerminal && asks(card)
+    const hasPopover = (card: Card) => openId === card.id || asks(card)
     const cardRowCount = Math.ceil(deck.length / perRow)
     let reserve = 0
-    for (const card of deck) {
-      if (openId === card.id) reserve = Math.max(reserve, popoverRows(card) - 1)
+    if (isTerminal) {
+      for (const card of deck) {
+        if (openId === card.id) reserve = Math.max(reserve, popoverRows(card) - 1)
+      }
+      reserve = Math.max(0, Math.min(reserve, e.props.maxRows - cardRowCount * 4))
     }
-    reserve = Math.max(0, Math.min(reserve, e.props.maxRows - cardRowCount * 4))
 
     return (
       <Box flexDirection="column">
