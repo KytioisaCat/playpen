@@ -46,6 +46,7 @@ const POLL_MS = 3_000
 const INBOX_MS = 1_000
 const HEARTBEAT_MS = 10_000
 const STALE_MS = 45_000
+const ASK_MS = 2_500 // an ask still open after this is a dialog, not the classifier
 const LABEL_MAX = 18
 const GIST_MAX = 22
 const LABEL_ASK = 16
@@ -80,10 +81,10 @@ let handoffTurnId: string | null = null // the turn that writes the brief
 // session be started on a model, nothing more is tried.
 let wantedModel: string | null = null
 let isBriefGiven = false
-// ⇢ takes two presses: the first arms it for a few seconds, the second fires
+// ✦ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
 const ARM_MS = 4_000
-// ↩ opens the card's answer on its second row: the question's options, or
+// ▸ opens the card's answer on its second row: the question's options, or
 // the prompt suggestion with a send button; it closes on its own
 let openId: string | null = null
 const OPEN_MS = 12_000
@@ -431,7 +432,7 @@ async function answer($: EngineInterface, card: Card, isMe: boolean, text: strin
   }
 }
 
-// ↩: opens the answer row when the card has something to answer with.
+// ▸: opens the answer row when the card has something to answer with.
 function pressAnswer($: EngineInterface, card: Card) {
   const hasOptions = card.question !== null && card.question.options.length > 0
   if (!hasOptions && !card.suggestion) {
@@ -452,7 +453,7 @@ function pressAnswer($: EngineInterface, card: Card) {
 
 // When the engine's own suggestion service says nothing within a moment of
 // the turn ending, and the reply ends on a question or an offer, write the
-// reply the person would most likely send to accept it, so ↩ has something.
+// reply the person would most likely send to accept it, so ▸ has something.
 async function suggestFallback($: EngineInterface, reply: string) {
   if (!shouldSummarize || !me || !hasPrompted) return
   const tail = reply.slice(-400)
@@ -477,7 +478,7 @@ async function suggestFallback($: EngineInterface, reply: string) {
           await writeMe($, { suggestion: trim(r.text, 200) })
         }
       } catch {
-        // no suggestion then; ↩ says so
+        // no suggestion then; ▸ says so
       }
     })()
   })
@@ -787,7 +788,7 @@ async function finishHandoff($: EngineInterface) {
   handoffTurnId = null
 }
 
-// The first press on ⇢ arms the card's hand-off and shows it plainly; the
+// The first press on ✦ arms the card's hand-off and shows it plainly; the
 // second, within ARM_MS, runs it. A press elsewhere, or time, disarms.
 function pressHandoff($: EngineInterface, card: Card, isMe: boolean) {
   if (armedId !== card.id) {
@@ -906,6 +907,24 @@ export const register: Register = (on, options) => {
     else isPromptUp = true
     await settle($)
     return next(e)
+  })
+
+  // The engine's own verdict on a real call: an `ask` goes to the mode's
+  // decider, a dialog or auto mode's classifier. The classifier answers in
+  // seconds; a call still in flight after that has a dialog up, whichever way
+  // the app shows it.
+  on('tool.check', async ($, e, next) => {
+    const r = await next(e)
+    const id = e.tool_use_id
+    if (id && r.decision === 'ask') {
+      $.clock.after(ASK_MS, () => {
+        if (inFlight.has(id) && !waitingIds.has(id)) {
+          waitingIds.add(id)
+          void settle($)
+        }
+      })
+    }
+    return r
   })
 
   // The app's own notice that a permission prompt is showing: a second signal
@@ -1039,7 +1058,7 @@ export const register: Register = (on, options) => {
     const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((columns - (PER_ROW - 1)) / PER_ROW)))
     const perRow = Math.max(1, Math.floor((columns + 1) / (cardWidth + 1)))
     const inner = cardWidth - 4 // less the frame and its padding
-    const labelMax = Math.max(8, inner - 8) // room for ⇢ ↩ ×
+    const labelMax = Math.max(8, inner - 8) // room for ✦ ▸ ×
 
     // The popover: twice a card wide, drawn over the neighbours and never in
     // the flow, so no card moves when it shows. The band clips at its own
@@ -1063,7 +1082,7 @@ export const register: Register = (on, options) => {
     // A red card with a question shows the question and its options in the
     // card itself, so the band already has that height, and its popover under
     // the pointer is the same content wide. Any card shows the popover while
-    // open with ↩; rows are reserved under the cards only then.
+    // open with ▸; rows are reserved under the cards only then.
     // The desktop app draws the popover over the transcript above the band
     // and clips nothing, so there the cards stay two rows and no space is
     // kept. The terminal clips at the band's edge: there a red card shows its
@@ -1071,7 +1090,7 @@ export const register: Register = (on, options) => {
     const isTerminal = e.surface === 'terminal'
     const asks = (card: Card) => card.state === 'waiting' && card.question !== null
     // The popover is revealed by the pointer alone, which is the one way the
-    // desktop app draws it whole. A red question has one; ↩ gives any card
+    // desktop app draws it whole. A red question has one; ▸ gives any card
     // one for a while, and since the pointer is on the card at the press, it
     // shows at once. In a terminal, which clips the popover, the same content
     // expands the card in the flow instead.
@@ -1136,7 +1155,7 @@ export const register: Register = (on, options) => {
                         key={`handoff:${card.id}`}
                         plain
                         dimColor
-                        label="⇢"
+                        label="✦"
                         onPress={() => pressHandoff($, card, isMe)}
                       />
                     )}
@@ -1144,7 +1163,7 @@ export const register: Register = (on, options) => {
                       key={`reply:${card.id}`}
                       plain
                       dimColor={!isOpen}
-                      label="↩"
+                      label="▸"
                       onPress={() => pressAnswer($, card)}
                     />
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
