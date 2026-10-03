@@ -793,13 +793,19 @@ export const register: Register = (on, options) => {
     const isTerminal = e.surface === 'terminal'
     const asks = (card: Card) => card.state === 'waiting' && card.question !== null
     const asksInCard = (card: Card) => isTerminal && asks(card)
-    const hasPopover = (card: Card) => openId === card.id || asks(card)
+    // the popover is hover-only; ↩ expands the card in the flow instead,
+    // which draws reliably on every surface
+    const hasPopover = (card: Card) => asks(card)
     const cardRowCount = Math.ceil(deck.length / perRow)
+    // rows kept free under the cards for a terminal's hover popover, which
+    // hangs below the card and would otherwise be cut at the band's edge
     let reserve = 0
     if (isTerminal) {
-      for (const card of deck) {
-        if (openId === card.id) reserve = Math.max(reserve, popoverRows(card) - 1)
-      }
+      deck.forEach((card, i) => {
+        if (!asks(card)) return
+        const rowsBelow = cardRowCount - 1 - Math.floor(i / perRow)
+        reserve = Math.max(reserve, popoverRows(card) - 1 - rowsBelow * 4)
+      })
       reserve = Math.max(0, Math.min(reserve, e.props.maxRows - cardRowCount * 4))
     }
 
@@ -875,25 +881,56 @@ export const register: Register = (on, options) => {
                   {card.gist ||
                     (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
                 </Text>
-                {asksInCard(card) && card.question && (
+                {/* The card expanded in the flow: taller, never wider, so no
+                    card moves. Open with ↩ on any card; always, in a terminal,
+                    for a card with a question. The full title where it adds to
+                    the label, then the question with one row per option, or the
+                    latest reply in full with the suggestion and a send button. */}
+                {(isOpen || asksInCard(card)) && (
                   <Box flexDirection="column">
-                    <Text color="red" wrap="wrap">
-                      {card.question.text}
-                    </Text>
-                    {options.map((label, n) => (
-                      <Box key={`option-in:${card.id}:${n}`} flexDirection="row" gap={1}>
+                    {isOpen && trim(card.title, LABEL_MAX) !== card.label && (
+                      <Text bold wrap="wrap">
+                        {card.title}
+                      </Text>
+                    )}
+                    {card.question && (
+                      <Text color="red" wrap="wrap">
+                        {card.question.text}
+                      </Text>
+                    )}
+                    {options.length > 0 ? (
+                      options.map((label, n) => (
+                        <Box key={`option-in:${card.id}:${n}`} flexDirection="row" gap={1}>
+                          <Button
+                            key={`answer-in:${card.id}:${label}`}
+                            plain
+                            hotkey={String(n + 1)}
+                            label={`[${n + 1}]`}
+                            onPress={() => void answer($, card, isMe, label)}
+                          />
+                          <Box width={inner - 4}>
+                            <Text wrap="wrap">{label}</Text>
+                          </Box>
+                        </Box>
+                      ))
+                    ) : (
+                      <Text dimColor wrap="wrap">
+                        {card.snippet || stateWord(card.state)}
+                      </Text>
+                    )}
+                    {options.length === 0 && card.suggestion && (
+                      <Box flexDirection="row" gap={1}>
                         <Button
-                          key={`answer-in:${card.id}:${label}`}
-                          plain
-                          hotkey={String(n + 1)}
-                          label={`[${n + 1}]`}
-                          onPress={() => void answer($, card, isMe, label)}
+                          key={`suggest-in:${card.id}`}
+                          variant="primary"
+                          label="send"
+                          onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
                         />
-                        <Box width={inner - 4}>
-                          <Text wrap="wrap">{label}</Text>
+                        <Box width={inner - 9}>
+                          <Text wrap="wrap">{card.suggestion}</Text>
                         </Box>
                       </Box>
-                    ))}
+                    )}
                   </Box>
                 )}
                 {hasPopover(card) && (
@@ -915,8 +952,8 @@ export const register: Register = (on, options) => {
                     paddingX={1}
                     borderStyle="round"
                     borderColor={card.state === 'waiting' ? 'red' : undefined}
-                    display={isOpen ? 'flex' : 'none'}
-                    {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
+                    display="none"
+                    hover={{ display: 'flex' }}
                   >
                     {trim(card.title, LABEL_MAX) !== card.label && (
                       <Text bold wrap="wrap">
