@@ -50,6 +50,7 @@ const LABEL_MAX = 18
 const GIST_MAX = 22
 const LABEL_ASK = 16
 const GIST_ASK = 20
+const SNIPPET_MAX = 400 // of the latest reply, kept for the expanded card
 const PER_ROW = 3
 const MIN_CARD = 24
 const MAX_CARD = 40
@@ -178,7 +179,7 @@ async function lastReply($: EngineInterface) {
   return last ? last.text.trim() : ''
 }
 
-const mySnippet = async ($: EngineInterface) => trim(await lastReply($), 80)
+const mySnippet = async ($: EngineInterface) => trim(await lastReply($), SNIPPET_MAX)
 
 // The heartbeat: proves the session is alive, and picks up a title the app
 // gave the session after its first prompt.
@@ -723,7 +724,7 @@ export const register: Register = (on, options) => {
     waitingIds.clear()
     isPromptUp = false
     const reply = await lastReply($)
-    await writeMe($, { state: 'done', question: null, snippet: trim(reply, 80) })
+    await writeMe($, { state: 'done', question: null, snippet: trim(reply, SNIPPET_MAX) })
     void refresh($)
     // the turn that wrote the brief, and no other (not the one a hand-off
     // interrupted, not a subagent's): start the new session from it
@@ -764,7 +765,6 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const isOpen = openId === card.id
           const options = card.question?.options ?? []
-          const hasAnswer = options.length > 0 || !!card.suggestion
           // an open card takes two places and wraps its question whole
           const width = isOpen ? Math.min(e.props.bodyColumns, cardWidth * 2 + 1) : cardWidth
           const room = width - 4
@@ -828,41 +828,59 @@ export const register: Register = (on, options) => {
                     {card.gist || stateWord(card.state)}
                   </Text>
                 )}
-                {hasAnswer && (
-                  // The answer rows: one per option, or the suggestion with a
-                  // send button. Shown while the card is open; otherwise drawn
-                  // hidden, and the surface reveals them under the pointer where
-                  // it applies hover styles (the terminal today).
-                  <Box
-                    flexDirection="column"
-                    display={isOpen ? 'flex' : 'none'}
-                    {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
-                  >
-                    {options.length > 0 ? (
-                      options.map((label, i) => (
+                {/* The expanded part: the full title, then the whole question with
+                    one row per option (a small numbered button, the text wrapped
+                    beside it), or the latest reply in full and the suggestion with
+                    a send button. Shown while the card is open; otherwise drawn
+                    hidden, and the surface reveals it under the pointer. A hover
+                    cannot widen the card, so the text wraps inside it. */}
+                <Box
+                  flexDirection="column"
+                  display={isOpen ? 'flex' : 'none'}
+                  {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
+                >
+                  <Text bold wrap="wrap">
+                    {card.title}
+                  </Text>
+                  {card.question && !isOpen && (
+                    <Text color="red" wrap="wrap">
+                      {card.question.text}
+                    </Text>
+                  )}
+                  {options.length > 0 ? (
+                    options.map((label, i) => (
+                      <Box key={`option:${card.id}:${i}`} flexDirection="row" gap={1}>
                         <Button
                           key={`answer:${card.id}:${label}`}
                           plain
                           hotkey={String(i + 1)}
-                          label={trim(label, room - 3)}
+                          label={`[${i + 1}]`}
                           onPress={() => void answer($, card, isMe, label)}
                         />
-                      ))
-                    ) : (
-                      <Box flexDirection="row" gap={1} overflow="hidden">
-                        <Button
-                          key={`suggest:${card.id}`}
-                          variant="primary"
-                          label="send"
-                          onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
-                        />
-                        <Text dimColor wrap="truncate-end">
-                          {trim(card.suggestion ?? '', room - 9)}
-                        </Text>
+                        <Box width={room - 4}>
+                          <Text wrap="wrap">{label}</Text>
+                        </Box>
                       </Box>
-                    )}
-                  </Box>
-                )}
+                    ))
+                  ) : (
+                    <Text dimColor wrap="wrap">
+                      {card.snippet || stateWord(card.state)}
+                    </Text>
+                  )}
+                  {options.length === 0 && card.suggestion && (
+                    <Box flexDirection="row" gap={1}>
+                      <Button
+                        key={`suggest:${card.id}`}
+                        variant="primary"
+                        label="send"
+                        onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
+                      />
+                      <Box width={room - 9}>
+                        <Text wrap="wrap">{card.suggestion}</Text>
+                      </Box>
+                    </Box>
+                  )}
+                </Box>
               </Box>
             </Box>
           )
