@@ -159,7 +159,16 @@ async function init($: EngineInterface) {
 
 // The app knows this session's id, title and link; the engine's own id is the
 // transcript's name and differs after a resume.
-type AppSession = { sessionId?: string; title?: string; link?: string; cwd?: string; model?: string; isArchived?: boolean }
+type AppSession = {
+  sessionId?: string
+  title?: string
+  link?: string
+  cwd?: string
+  model?: string
+  isArchived?: boolean
+  pinned?: boolean
+  group?: { id: string; name: string } | null
+}
 
 async function selfApp($: EngineInterface): Promise<AppSession | null> {
   try {
@@ -616,12 +625,38 @@ function watchNewSession($: EngineInterface, cwd: string, known: Set<string>, si
       timer.cancel()
       const where = fresh.cwd && !sameWorkspace(fresh.cwd, cwd) ? ` in ${fresh.cwd}, not this folder` : ' in this folder'
       $.ui.log(`hand-off: the new session ${fresh.sessionId} opened${where}`)
+      await takeSidebarPlace($, fresh.sessionId)
     } catch (error) {
       timer.cancel()
       $.ui.log(`hand-off: could not watch for the new session: ${trim(String(error), 160)}`)
     } finally {
       isBusy = false
     }
+  }
+}
+
+// The new session takes this one's place in the sidebar: its custom group,
+// and its pin, which this session gives up. Pinned sessions sort by activity,
+// so the new one stands where this one stood. The app may ask first.
+async function takeSidebarPlace($: EngineInterface, newId: string) {
+  const self = await selfApp($)
+  if (!self) return
+  const done: string[] = []
+  const call = async (tool: string, args: Record<string, unknown>, what: string) => {
+    const r = await $.mcp.call('ccd_sidebar', tool, args)
+    if (r.isError) $.ui.log(`hand-off: sidebar: ${what} refused (${trim(mcpText(r), 160)})`)
+    else done.push(what)
+  }
+  try {
+    // the group first: a move into a group takes a pin off
+    if (self.group?.id) await call('move_sessions', { session_ids: [newId], group_id: self.group.id }, `filed under ${self.group.name}`)
+    if (self.pinned) {
+      await call('set_pinned', { session_id: newId, pinned: true }, 'pinned')
+      await call('set_pinned', { session_id: 'self', pinned: false }, 'this one unpinned')
+    }
+    if (done.length) $.ui.log(`hand-off: sidebar: the new session ${done.join(', ')}`)
+  } catch (error) {
+    $.ui.log(`hand-off: sidebar: could not place the new session: ${trim(String(error), 160)}`)
   }
 }
 
