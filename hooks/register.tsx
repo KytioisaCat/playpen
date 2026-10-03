@@ -792,17 +792,20 @@ export const register: Register = (on, options) => {
     // question in the card, and rows are reserved while a card is open.
     const isTerminal = e.surface === 'terminal'
     const asks = (card: Card) => card.state === 'waiting' && card.question !== null
-    const asksInCard = (card: Card) => isTerminal && asks(card)
-    // the popover is hover-only; ↩ expands the card in the flow instead,
-    // which draws reliably on every surface
-    const hasPopover = (card: Card) => asks(card)
+    // The popover is revealed by the pointer alone, which is the one way the
+    // desktop app draws it whole. A red question has one; ↩ gives any card
+    // one for a while, and since the pointer is on the card at the press, it
+    // shows at once. In a terminal, which clips the popover, the same content
+    // expands the card in the flow instead.
+    const hasPopover = (card: Card) => asks(card) || openId === card.id
+    const expandsInCard = (card: Card) => isTerminal && (asks(card) || openId === card.id)
     const cardRowCount = Math.ceil(deck.length / perRow)
     // rows kept free under the cards for a terminal's hover popover, which
     // hangs below the card and would otherwise be cut at the band's edge
     let reserve = 0
     if (isTerminal) {
       deck.forEach((card, i) => {
-        if (!asks(card)) return
+        if (!hasPopover(card)) return
         const rowsBelow = cardRowCount - 1 - Math.floor(i / perRow)
         reserve = Math.max(reserve, popoverRows(card) - 1 - rowsBelow * 4)
       })
@@ -881,12 +884,11 @@ export const register: Register = (on, options) => {
                   {card.gist ||
                     (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
                 </Text>
-                {/* The card expanded in the flow: taller, never wider, so no
-                    card moves. Open with ↩ on any card; always, in a terminal,
-                    for a card with a question. The full title where it adds to
-                    the label, then the question with one row per option, or the
-                    latest reply in full with the suggestion and a send button. */}
-                {(isOpen || asksInCard(card)) && (
+                {/* A terminal only: the card expanded in the flow, taller and
+                    never wider. The full title where it adds to the label, then
+                    the question with one row per option, or the latest reply in
+                    full with the suggestion and a send button. */}
+                {expandsInCard(card) && (
                   <Box flexDirection="column">
                     {isOpen && trim(card.title, LABEL_MAX) !== card.label && (
                       <Text bold wrap="wrap">
