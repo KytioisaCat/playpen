@@ -494,6 +494,11 @@ async function startHandoff($: EngineInterface) {
 // person's Enter: the app creates the session only then, so the mod cannot
 // send it first, and must not send it again.
 const pendingPath = () => `${home}/.claude/switchboard/handoff/pending.json`
+// A session with no folder runs in a scratch workspace the app makes, and
+// the app may make a fresh one for the session the link opens; two scratch
+// workspaces count as the same place.
+const isScratch = (p: string) => p.includes('/scratch-workspaces/')
+const sameWorkspace = (a: string, b: string) => a === b || (isScratch(a) && isScratch(b))
 const PENDING_MS = 10 * 60 * 1000
 
 async function takePendingHandoff($: EngineInterface, cwd: string) {
@@ -505,7 +510,7 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
       at?: number
     }
     const now = await $.clock.now()
-    if (pending.cwd !== cwd || !pending.at || now - pending.at > PENDING_MS) return
+    if (!pending.cwd || !sameWorkspace(pending.cwd, cwd) || !pending.at || now - pending.at > PENDING_MS) return
     await $.fs.write(pendingPath(), '{}')
     // the previous session's model, where the app started this one on another:
     // `/model <id>` as the person would type it, which the app's indicator
@@ -564,7 +569,7 @@ async function carryModel($: EngineInterface, cwd: string, model: string, known:
         finish(`hand-off: model ${model} not carried over; no new session in this folder within ${CARRY_MS / 60_000} minutes`)
         return
       }
-      const fresh = (await listApp($)).find(s => s.sessionId && s.cwd === cwd && !s.isArchived && !known.has(s.sessionId))
+      const fresh = (await listApp($)).find(s => s.sessionId && s.cwd && sameWorkspace(s.cwd, cwd) && !s.isArchived && !known.has(s.sessionId))
       if (!fresh?.sessionId) return
       const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: fresh.sessionId })
       const now = r.isError ? undefined : (JSON.parse(mcpText(r)) as AppSession).model
