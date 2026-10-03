@@ -559,12 +559,14 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
     const appModel = await $.session.model()
     if (pending.model && pending.model !== appModel) {
       wantedModel = pending.model
-      const notice =
-        `The previous session ran on ${pending.model}. A new session starts on the model last picked, ${appModel}, ` +
-        `so this first reply is answered by ${pending.model}; to go on with it, pick it in the model menu. ` +
-        `Otherwise the next messages use ${appModel}.`
-      $.ui.log(`hand-off: ${notice}`)
-      $.ui.toast(notice)
+      $.ui.log(
+        `hand-off: the previous session ran on ${pending.model}; the app started this one on the model last picked, ${appModel}. ` +
+        `This first reply is answered by ${pending.model}. To go on with ${pending.model}, pick it in the model menu; otherwise the next messages use ${appModel}.`,
+      )
+      $.ui.toast(
+        `MODEL: pick ${pending.model} in the model menu to go on as before. The previous session ran on it; this one started on ${appModel}. Only this first reply is answered by ${pending.model}.`,
+        { timeoutMs: 15_000 },
+      )
     }
     // the project folder, where the app opened the session elsewhere: the
     // app's own move, which the person approves
