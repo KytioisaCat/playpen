@@ -217,13 +217,16 @@ async function readAll($: EngineInterface): Promise<Own[]> {
 
 // --- short labels from a small model ----------------------------------------
 
-const miniKey = (title: string, snippet: string) => `${title}\u0000${snippet}`
+// the label and gist are made for this title, reply and open question; a
+// change in any of them is a new pair to summarize
+const miniKey = (card: Pick<Card, 'title' | 'snippet' | 'question'>) =>
+  `${card.title}\u0000${card.snippet}\u0000${card.question?.text ?? ''}`
 
 // One card at a time, so a burst of activity costs one small call per poll
 // and never blocks the band.
 async function summarizeNext($: EngineInterface) {
   if (!shouldSummarize || isSummarizing) return
-  const card = deck.find(c => c.state !== 'working' && minis[c.id]?.key !== miniKey(c.title, c.snippet))
+  const card = deck.find(c => c.state !== 'working' && minis[c.id]?.key !== miniKey(c))
   if (!card) return
   isSummarizing = true
   try {
@@ -239,13 +242,15 @@ async function summarizeNext($: EngineInterface) {
         `"label" (max ${LABEL_ASK} characters): the topic of the session, so the reader knows which chat it is. Prefer the concrete subject (feature, bug, component, document) over generic words. ` +
         `"gist" (max ${GIST_ASK} characters): the current status from the latest reply. Lead with what matters: done, needs a decision or input, error, blocked, in progress, or a question asked. Telegram style, no trailing period. ` +
         'Write in the language of the latest reply; if there is none, the language of the title. Keep proper nouns and technical terms as they are. No other text.',
-      prompt: `Project folder: ${folder}\nSession title: ${card.title}\nLatest reply from Claude: ${card.snippet || '(nothing yet)'}`,
+      prompt:
+        `Project folder: ${folder}\nSession title: ${card.title}\nLatest reply from Claude: ${card.snippet || '(nothing yet)'}` +
+        (card.question ? `\nOpen question to the person right now (the gist should say what is asked): ${card.question.text}` : ''),
     })
     if (r.isAnswered) {
       const match = r.text.match(/\{[\s\S]*\}/)
       const parsed = match ? (JSON.parse(match[0]) as { label?: string; gist?: string }) : {}
       const mini: Mini = {
-        key: miniKey(card.title, card.snippet),
+        key: miniKey(card),
         label: trim(parsed.label || card.title, LABEL_MAX),
         gist: trim(parsed.gist || card.snippet, GIST_MAX),
       }
@@ -765,8 +770,11 @@ export const register: Register = (on, options) => {
           const isMe = me !== null && card.id === me.id
           const isOpen = openId === card.id
           const options = card.question?.options ?? []
-          // an open card takes two places and wraps its question whole
-          const width = isOpen ? Math.min(e.props.bodyColumns, cardWidth * 2 + 1) : cardWidth
+          // An open card takes two places. A closed one has a minimum width
+          // only, so the expanded part, drawn wider, can pull the card out
+          // when the surface reveals it under the pointer.
+          const wide = Math.min(e.props.bodyColumns, cardWidth * 2 + 1)
+          const width = isOpen ? wide : cardWidth
           const room = width - 4
           return (
             // a thin frame around the whole card: dim, full strength on this
@@ -774,14 +782,14 @@ export const register: Register = (on, options) => {
             <Box
               key={`card:${card.id}`}
               flexDirection="column"
-              width={width}
+              {...(isOpen ? { width } : { minWidth: width })}
               paddingX={1}
               borderStyle="round"
               borderDimColor={!isMe}
               hover={{ borderDimColor: false }}
             >
-              <Box flexDirection="column" width={room}>
-                <Box flexDirection="row" justifyContent="space-between">
+              <Box flexDirection="column">
+                <Box flexDirection="row" justifyContent="space-between" width={room}>
                   <Box flexDirection="row" gap={1} overflow="hidden">
                     <Text color={lampColor(card.state)}>●</Text>
                     <Button
@@ -818,31 +826,32 @@ export const register: Register = (on, options) => {
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>
-                {card.state === 'waiting' ? (
-                  // open, the whole question; otherwise one line of it
-                  <Text color="red" wrap={isOpen ? 'wrap' : 'truncate-end'}>
-                    {card.question ? (isOpen ? card.question.text : trim(card.question.text, room)) : 'needs you'}
+                {/* Row two is always the short form: the gist, red while the
+                    session needs you. The question itself lives in the expanded
+                    part only, so hovering never shows it twice. */}
+                <Box width={room}>
+                  <Text color={card.state === 'waiting' ? 'red' : undefined} dimColor={card.state !== 'waiting'} wrap="truncate-end">
+                    {card.gist || (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
                   </Text>
-                ) : (
-                  <Text dimColor wrap="truncate-end">
-                    {card.gist || stateWord(card.state)}
-                  </Text>
-                )}
-                {/* The expanded part: the full title, then the whole question with
-                    one row per option (a small numbered button, the text wrapped
-                    beside it), or the latest reply in full and the suggestion with
-                    a send button. Shown while the card is open; otherwise drawn
-                    hidden, and the surface reveals it under the pointer. A hover
-                    cannot widen the card, so the text wraps inside it. */}
+                </Box>
+                {/* The expanded part: the full title where it adds to the label,
+                    the whole question with one row per option (a small numbered
+                    button, the text wrapped beside it), or the latest reply in
+                    full and the suggestion with a send button. Shown while the
+                    card is open; otherwise drawn hidden and wide, and the surface
+                    reveals it under the pointer. */}
                 <Box
                   flexDirection="column"
+                  width={wide - 4}
                   display={isOpen ? 'flex' : 'none'}
                   {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
                 >
-                  <Text bold wrap="wrap">
-                    {card.title}
-                  </Text>
-                  {card.question && !isOpen && (
+                  {trim(card.title, LABEL_MAX) !== card.label && (
+                    <Text bold wrap="wrap">
+                      {card.title}
+                    </Text>
+                  )}
+                  {card.question && (
                     <Text color="red" wrap="wrap">
                       {card.question.text}
                     </Text>
@@ -857,7 +866,7 @@ export const register: Register = (on, options) => {
                           label={`[${i + 1}]`}
                           onPress={() => void answer($, card, isMe, label)}
                         />
-                        <Box width={room - 4}>
+                        <Box width={wide - 8}>
                           <Text wrap="wrap">{label}</Text>
                         </Box>
                       </Box>
@@ -875,7 +884,7 @@ export const register: Register = (on, options) => {
                         label="send"
                         onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
                       />
-                      <Box width={room - 9}>
+                      <Box width={wide - 13}>
                         <Text wrap="wrap">{card.suggestion}</Text>
                       </Box>
                     </Box>
