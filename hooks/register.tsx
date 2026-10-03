@@ -518,7 +518,15 @@ const isScratch = (p: string) => p.includes('/scratch-workspaces/')
 const sameWorkspace = (a: string, b: string) => a === b || (isScratch(a) && isScratch(b))
 const PENDING_MS = 10 * 60 * 1000
 
-type Pending = { cwd?: string; model?: string; briefPath?: string; title?: string; at?: number }
+type Pending = {
+  cwd?: string
+  model?: string
+  briefPath?: string
+  title?: string
+  at?: number
+  pinned?: boolean
+  group?: { id: string; name: string } | null
+}
 
 // The marker is consumed once, by whichever of the start hooks reads it first.
 let pendingRead: Promise<Pending | null> | null = null
@@ -587,6 +595,24 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
         $.ui.log(`hand-off: folder not moved to ${pending.cwd}: ${trim(String(error), 160)}`)
       }
     }
+    // the previous session's place in the sidebar: its group, then its pin
+    // (a move into a group takes a pin off). On "self", the app asks no one.
+    const placed: string[] = []
+    try {
+      if (pending.group?.id) {
+        const r = await $.mcp.call('ccd_sidebar', 'move_sessions', { session_ids: ['self'], group_id: pending.group.id })
+        if (!r.isError) placed.push(`filed under ${pending.group.name}`)
+        else $.ui.log(`hand-off: not filed under ${pending.group.name} (${trim(mcpText(r), 120)})`)
+      }
+      if (pending.pinned) {
+        const r = await $.mcp.call('ccd_sidebar', 'set_pinned', { session_id: 'self', pinned: true })
+        if (!r.isError) placed.push('pinned')
+        else $.ui.log(`hand-off: not pinned (${trim(mcpText(r), 120)})`)
+      }
+    } catch (error) {
+      $.ui.log(`hand-off: sidebar place not taken: ${trim(String(error), 120)}`)
+    }
+    if (placed.length) $.ui.log(`hand-off: this session is ${placed.join(' and ')}, as the previous one was`)
     $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
     // an unreadable marker: the model stays the app's choice
@@ -625,38 +651,17 @@ function watchNewSession($: EngineInterface, cwd: string, known: Set<string>, si
       timer.cancel()
       const where = fresh.cwd && !sameWorkspace(fresh.cwd, cwd) ? ` in ${fresh.cwd}, not this folder` : ' in this folder'
       $.ui.log(`hand-off: the new session ${fresh.sessionId} opened${where}`)
-      await takeSidebarPlace($, fresh.sessionId)
+      // its own pin goes, now that the new session (which pins itself) exists
+      if ((await selfApp($))?.pinned) {
+        const r = await $.mcp.call('ccd_sidebar', 'set_pinned', { session_id: 'self', pinned: false })
+        $.ui.log(r.isError ? `hand-off: could not unpin this session (${trim(mcpText(r), 120)})` : 'hand-off: this session is unpinned; the new one takes the pin')
+      }
     } catch (error) {
       timer.cancel()
       $.ui.log(`hand-off: could not watch for the new session: ${trim(String(error), 160)}`)
     } finally {
       isBusy = false
     }
-  }
-}
-
-// The new session takes this one's place in the sidebar: its custom group,
-// and its pin, which this session gives up. Pinned sessions sort by activity,
-// so the new one stands where this one stood. The app may ask first.
-async function takeSidebarPlace($: EngineInterface, newId: string) {
-  const self = await selfApp($)
-  if (!self) return
-  const done: string[] = []
-  const call = async (tool: string, args: Record<string, unknown>, what: string) => {
-    const r = await $.mcp.call('ccd_sidebar', tool, args)
-    if (r.isError) $.ui.log(`hand-off: sidebar: ${what} refused (${trim(mcpText(r), 160)})`)
-    else done.push(what)
-  }
-  try {
-    // the group first: a move into a group takes a pin off
-    if (self.group?.id) await call('move_sessions', { session_ids: [newId], group_id: self.group.id }, `filed under ${self.group.name}`)
-    if (self.pinned) {
-      await call('set_pinned', { session_id: newId, pinned: true }, 'pinned')
-      await call('set_pinned', { session_id: 'self', pinned: false }, 'this one unpinned')
-    }
-    if (done.length) $.ui.log(`hand-off: sidebar: the new session ${done.join(', ')}`)
-  } catch (error) {
-    $.ui.log(`hand-off: sidebar: could not place the new session: ${trim(String(error), 160)}`)
   }
 }
 
@@ -735,17 +740,20 @@ async function finishHandoff($: EngineInterface) {
     // own switchboard finds this marker at start and sets this session's
     // model there, where the app started it on another.
     // the model as the app names it, which its picker and set_session_model take
-    let model = ''
-    try {
-      model = (await selfApp($))?.model || (await $.session.model())
-    } catch {
-      // the new session keeps the app's default
+    const self = await selfApp($)
+    let model = self?.model ?? ''
+    if (!model) {
+      try {
+        model = await $.session.model()
+      } catch {
+        // the new session keeps the app's default
+      }
     }
     const known = new Set((await listApp($).catch(() => [])).map(s => s.sessionId ?? ''))
     known.add(me.id)
     const at = await $.clock.now()
     try {
-      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, title, at } satisfies Pending))
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, title, at, pinned: self?.pinned, group: self?.group } satisfies Pending))
     } catch {
       // the model is then the app's choice
     }
