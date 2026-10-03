@@ -554,17 +554,8 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
   try {
     const pending = await readPending($)
     if (!pending) return
-    // the project folder, where the app opened the session elsewhere: the
-    // app's own move, which the person approves
-    if (pending.cwd && !isScratch(pending.cwd) && pending.cwd !== cwd) {
-      try {
-        const r = await $.mcp.call('ccd_directory', 'change_directory', { path: pending.cwd })
-        $.ui.log(`hand-off: folder ${r.isError ? 'not moved' : 'moved'} to ${pending.cwd} (${trim(mcpText(r), 160)})`)
-      } catch (error) {
-        $.ui.log(`hand-off: folder not moved to ${pending.cwd}: ${trim(String(error), 160)}`)
-      }
-    }
-    // the previous session's model, where the app started this one on another
+    // the previous session's model, where the app started this one on another;
+    // first, before anything that waits, so the first request already goes there
     const appModel = await $.session.model()
     if (pending.model && pending.model !== appModel) {
       wantedModel = pending.model
@@ -574,6 +565,16 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
         `Otherwise the next messages use ${appModel}.`
       $.ui.log(`hand-off: ${notice}`)
       $.ui.toast(notice)
+    }
+    // the project folder, where the app opened the session elsewhere: the
+    // app's own move, which the person approves
+    if (pending.cwd && !isScratch(pending.cwd) && pending.cwd !== cwd) {
+      try {
+        const r = await $.mcp.call('ccd_directory', 'change_directory', { path: pending.cwd })
+        $.ui.log(`hand-off: folder ${r.isError ? 'not moved' : 'moved'} to ${pending.cwd} (${trim(mcpText(r), 160)})`)
+      } catch (error) {
+        $.ui.log(`hand-off: folder not moved to ${pending.cwd}: ${trim(String(error), 160)}`)
+      }
     }
     $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
