@@ -501,17 +501,54 @@ const isScratch = (p: string) => p.includes('/scratch-workspaces/')
 const sameWorkspace = (a: string, b: string) => a === b || (isScratch(a) && isScratch(b))
 const PENDING_MS = 10 * 60 * 1000
 
+type Pending = { cwd?: string; model?: string; briefPath?: string; title?: string; at?: number }
+
+// The marker is consumed once, by whichever of the start hooks reads it first.
+let pendingRead: Promise<Pending | null> | null = null
+
+function readPending($: EngineInterface): Promise<Pending | null> {
+  pendingRead ??= (async () => {
+    try {
+      if (!(await $.fs.exists(pendingPath()))) return null
+      const pending = JSON.parse(await $.fs.read(pendingPath())) as Pending
+      const now = await $.clock.now()
+      if (!pending.at || now - pending.at > PENDING_MS) return null
+      await $.fs.write(pendingPath(), '{}')
+      return pending
+    } catch {
+      return null
+    }
+  })()
+  return pendingRead
+}
+
+// The brief, for the first turn's context: the new session reads it here,
+// whatever folder the app put it in, so no file read is asked of the model.
+async function briefContext($: EngineInterface): Promise<string | null> {
+  const pending = await readPending($)
+  if (!pending?.briefPath) return null
+  try {
+    const text = await $.fs.read(pending.briefPath)
+    return `The switchboard mod handed this session off from the session "${pending.title ?? ''}". Its brief, also saved at ${pending.briefPath}:\n\n${text}`
+  } catch {
+    return null
+  }
+}
+
 async function takePendingHandoff($: EngineInterface, cwd: string) {
   try {
-    if (!(await $.fs.exists(pendingPath()))) return
-    const pending = JSON.parse(await $.fs.read(pendingPath())) as {
-      cwd?: string
-      model?: string
-      at?: number
+    const pending = await readPending($)
+    if (!pending) return
+    // the project folder, where the app opened the session elsewhere: the
+    // app's own move, which the person approves
+    if (pending.cwd && !isScratch(pending.cwd) && pending.cwd !== cwd) {
+      try {
+        const r = await $.mcp.call('ccd_directory', 'change_directory', { path: pending.cwd })
+        $.ui.log(`hand-off: folder ${r.isError ? 'not moved' : 'moved'} to ${pending.cwd} (${trim(mcpText(r), 160)})`)
+      } catch (error) {
+        $.ui.log(`hand-off: folder not moved to ${pending.cwd}: ${trim(String(error), 160)}`)
+      }
     }
-    const now = await $.clock.now()
-    if (!pending.cwd || !sameWorkspace(pending.cwd, cwd) || !pending.at || now - pending.at > PENDING_MS) return
-    await $.fs.write(pendingPath(), '{}')
     // the previous session's model, where the app started this one on another:
     // `/model <id>` as the person would type it, which the app's indicator
     // follows; the model before and after says whether it took
@@ -540,10 +577,10 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
 }
 
 // The app starts a session from the link on its model picker's last choice,
-// whichever session asked. So the new session's model is set from here, the
-// app's way, once the app lists it: the first session in this folder that
-// was not there before the link opened. The app may ask before it switches
-// another session; the log says what came of it.
+// whichever session asked, and in the folder of its own choosing. So the new
+// session's model is set from here, the app's way, once the app lists it:
+// the first session that was not there before the link opened. The app may
+// ask before it switches another session; the log says what came of it.
 const CARRY_MS = 5 * 60 * 1000
 
 async function listApp($: EngineInterface): Promise<AppSession[]> {
@@ -569,10 +606,15 @@ async function carryModel($: EngineInterface, cwd: string, model: string, known:
         finish(`hand-off: model ${model} not carried over; no new session in this folder within ${CARRY_MS / 60_000} minutes`)
         return
       }
-      const fresh = (await listApp($)).find(s => s.sessionId && s.cwd && sameWorkspace(s.cwd, cwd) && !s.isArchived && !known.has(s.sessionId))
+      const fresh = (await listApp($)).find(s => s.sessionId && !s.isArchived && !known.has(s.sessionId))
       if (!fresh?.sessionId) return
       const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: fresh.sessionId })
       const now = r.isError ? undefined : (JSON.parse(mcpText(r)) as AppSession).model
+      if (fresh.cwd && !sameWorkspace(fresh.cwd, cwd)) $.ui.log(`hand-off: the new session ${fresh.sessionId} opened in ${fresh.cwd}, not ${cwd}`)
+      if (!model) {
+        finish(`hand-off: the new session ${fresh.sessionId} keeps the app's model; this session's was not known`)
+        return
+      }
       if (now === model) {
         finish(`hand-off: the new session ${fresh.sessionId} already runs on ${model}`)
         return
@@ -625,8 +667,9 @@ async function finishHandoff($: EngineInterface) {
   $.ui.log(`hand-off: brief of ${brief.length} characters saved to ${briefPath}`)
   // short, because it rides in the link that opens the new session
   const opener =
-    `Continue the work handed off from the session "${title}" in this folder. ` +
-    `Read the brief at ${briefPath} first; it is the whole history. Then pick up from its next steps.`
+    `Continue the work handed off from the session "${title}". ` +
+    `Its brief is in your context (also saved at ${briefPath}); it is the whole history. Pick up from its next steps.` +
+    (isScratch(me.cwd) ? '' : ` The work is in ${me.cwd}: if this session is not in that folder, move there first with change_directory.`)
 
   let started = ''
   try {
@@ -673,16 +716,19 @@ async function finishHandoff($: EngineInterface) {
     known.add(me.id)
     const at = await $.clock.now()
     try {
-      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, at }))
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, title, at } satisfies Pending))
     } catch {
       // the model is then the app's choice
     }
-    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}&q=${encodeURIComponent(opener)}`
+    // a scratch folder named in the link is taken as "no folder" and a fresh
+    // one is made, after a trust dialog about the old; so it is left out
+    const folder = isScratch(me.cwd) ? '' : `folder=${encodeURIComponent(me.cwd)}&`
+    const url = `claude://code/new?${folder}q=${encodeURIComponent(opener)}`
     try {
       const r = await $.process.run(['open', url])
       if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
       started = 'through the new-session link'
-      if (model) void carryModel($, me.cwd, model, known, at)
+      void carryModel($, me.cwd, model, known, at)
     } catch (error2) {
       $.ui.log(`hand-off: could not open the new-session link: ${trim(String(error2), 200)}`)
     }
@@ -828,6 +874,14 @@ export const register: Register = (on, options) => {
       await settle($)
     }
     return next(e)
+  })
+
+  // A session the hand-off link opened reads the brief into its first turn.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    if (e.source !== 'startup') return r
+    const brief = await briefContext($)
+    return brief ? { ...r, additionalContext: [...(r.additionalContext ?? []), brief] } : r
   })
 
   // Every model change in the transcript with who made it, so a hand-off's
