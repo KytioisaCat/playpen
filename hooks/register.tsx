@@ -486,6 +486,32 @@ async function startHandoff($: EngineInterface) {
   void $.prompt.submit({ text: HANDOFF_ASK, asUser: true })
 }
 
+// A hand-off started through the app's link leaves this marker; the new
+// session in that folder picks it up at start and sends the opener itself.
+const pendingPath = () => `${home}/.claude/switchboard/handoff/pending.json`
+const PENDING_MS = 3 * 60 * 1000
+
+async function takePendingHandoff($: EngineInterface, cwd: string) {
+  try {
+    if (!(await $.fs.exists(pendingPath()))) return
+    const pending = JSON.parse(await $.fs.read(pendingPath())) as { cwd?: string; opener?: string; at?: number }
+    const now = await $.clock.now()
+    if (pending.cwd !== cwd || !pending.opener || !pending.at || now - pending.at > PENDING_MS) return
+    if ((await $.session.messages()).length > 0) return
+    await $.fs.write(pendingPath(), '{}')
+    $.ui.log('hand-off: continuing from the brief the previous session wrote')
+    // the link's own filled-in draft would otherwise stay in the box
+    try {
+      await $.prompt.fill({ text: '', mode: 'replace' })
+    } catch {
+      // a box that would not clear; the draft is harmless
+    }
+    void $.prompt.submit({ text: pending.opener, asUser: true })
+  } catch {
+    // an unreadable marker: the person sends the filled-in prompt by hand
+  }
+}
+
 // Step two: save the brief as a file, start a fresh session in the same
 // folder that reads it first, and retire this card. The new session's card
 // takes this folder's place on the board. Each step leaves a line in the
@@ -551,6 +577,13 @@ async function finishHandoff($: EngineInterface) {
     started = 'through start_session'
   } catch (error) {
     $.ui.log(`hand-off: start_session is not available here (${trim(String(error), 120)}); opening the app's new-session link`)
+    // The link fills the prompt in but does not send it. The new session's
+    // own switchboard finds this marker at start and sends it, so no Enter.
+    try {
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, opener, briefPath, at: await $.clock.now() }))
+    } catch {
+      // then the person presses Enter on the filled-in prompt
+    }
     const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}&q=${encodeURIComponent(opener)}`
     try {
       const r = await $.process.run(['open', url])
@@ -634,6 +667,9 @@ export const register: Register = (on, options) => {
     }
 
     await $.command.register({ name: 'board', description: 'Show or hide the switchboard band', immediate: true })
+
+    // a session the hand-off link opened: send its opener without an Enter
+    void takePendingHandoff($, e.cwd)
 
     $.clock.every(POLL_MS, () => void refresh($))
     $.clock.every(INBOX_MS, () => void pollInbox($))
