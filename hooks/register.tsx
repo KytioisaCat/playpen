@@ -905,7 +905,10 @@ export const register: Register = (on, options) => {
                   // it while the pointer is over the card or the popover itself.
                   <Box
                     position="absolute"
-                    top={2}
+                    // above the card in the desktop app, where nothing clips and
+                    // the prompt sits right under the band; below it in a terminal,
+                    // which clips above the band and keeps rows free below
+                    {...(isTerminal ? { top: 2 } : { bottom: 2 })}
                     {...(anchorRight ? { right: -2 } : { left: -2 })}
                     width={wide}
                     flexDirection="column"
