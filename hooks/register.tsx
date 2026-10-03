@@ -782,18 +782,17 @@ export const register: Register = (on, options) => {
       }
       return rows
     }
-    // a red card with a question shows its popover under the pointer; any
-    // card shows it while open with ↩
-    const hasPopover = (card: Card) => openId === card.id || (card.state === 'waiting' && card.question !== null)
+    // A red card with a question shows the question and its options in the
+    // card itself, so the band already has that height, and its popover under
+    // the pointer is the same content wide. Any card shows the popover while
+    // open with ↩; rows are reserved under the cards only then.
+    const asksInCard = (card: Card) => card.state === 'waiting' && card.question !== null
+    const hasPopover = (card: Card) => openId === card.id || asksInCard(card)
     const cardRowCount = Math.ceil(deck.length / perRow)
     let reserve = 0
-    deck.forEach((card, i) => {
-      if (!hasPopover(card)) return
-      const rowsBelow = cardRowCount - 1 - Math.floor(i / perRow)
-      // the popover starts on the card's bottom border and runs down past
-      // the card rows beneath it
-      reserve = Math.max(reserve, popoverRows(card) - 1 - rowsBelow * 4)
-    })
+    for (const card of deck) {
+      if (openId === card.id) reserve = Math.max(reserve, popoverRows(card) - 1)
+    }
     reserve = Math.max(0, Math.min(reserve, e.props.maxRows - cardRowCount * 4))
 
     return (
@@ -856,8 +855,10 @@ export const register: Register = (on, options) => {
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>
-                {/* Row two is always the short form: the gist, red while the
-                    session needs you. The question itself lives in the popover. */}
+                {/* Row two is the short form: the gist, red while the session
+                    needs you. A card that asks a question goes on below it with
+                    the question and one row per option, in the card's own
+                    width; the popover shows the same thing wide. */}
                 <Text
                   color={card.state === 'waiting' ? 'red' : undefined}
                   dimColor={card.state !== 'waiting'}
@@ -866,6 +867,27 @@ export const register: Register = (on, options) => {
                   {card.gist ||
                     (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
                 </Text>
+                {asksInCard(card) && card.question && (
+                  <Box flexDirection="column">
+                    <Text color="red" wrap="wrap">
+                      {card.question.text}
+                    </Text>
+                    {options.map((label, n) => (
+                      <Box key={`option-in:${card.id}:${n}`} flexDirection="row" gap={1}>
+                        <Button
+                          key={`answer-in:${card.id}:${label}`}
+                          plain
+                          hotkey={String(n + 1)}
+                          label={`[${n + 1}]`}
+                          onPress={() => void answer($, card, isMe, label)}
+                        />
+                        <Box width={inner - 4}>
+                          <Text wrap="wrap">{label}</Text>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                )}
                 {hasPopover(card) && (
                   // The popover: the full title where it adds to the label, the
                   // whole question with one row per option (a small numbered
