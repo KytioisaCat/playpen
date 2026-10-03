@@ -72,6 +72,10 @@ let hasPrompted = false
 let heldTurnId: string | null = null
 let isHandingOff = false
 let handoffTurnId: string | null = null // the turn that writes the brief
+// the previous session's model, for a session the hand-off link opened: each
+// request goes there from the start, and /model follows once no turn runs
+let wantedModel: string | null = null
+let isTurnRunning = false
 // ⇢ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
 const ARM_MS = 4_000
@@ -535,6 +539,33 @@ async function briefContext($: EngineInterface): Promise<string | null> {
   }
 }
 
+// /model <id> as the person would type it, which the app's indicator follows;
+// run between turns only, and the model before and after says whether it took.
+async function switchModel($: EngineInterface) {
+  const wanted = wantedModel
+  if (!wanted || isTurnRunning) return
+  const before = await $.session.model()
+  if (before === wanted) {
+    wantedModel = null
+    return
+  }
+  let note = ''
+  try {
+    const r = await $.command.run({ command: 'model', args: wanted })
+    note = r.text ? trim(r.text, 120) : ''
+  } catch (error) {
+    note = trim(String(error), 120)
+  }
+  const after = await $.session.model()
+  const tail = note ? ` (${note})` : ''
+  if (after !== before) {
+    wantedModel = null
+    $.ui.log(`hand-off: model ${before} → ${after}${tail}`)
+  } else {
+    $.ui.log(`hand-off: model stays ${after}; wanted ${wanted}, and its requests keep going there${tail}`)
+  }
+}
+
 async function takePendingHandoff($: EngineInterface, cwd: string) {
   try {
     const pending = await readPending($)
@@ -549,26 +580,12 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
         $.ui.log(`hand-off: folder not moved to ${pending.cwd}: ${trim(String(error), 160)}`)
       }
     }
-    // the previous session's model, where the app started this one on another:
-    // `/model <id>` as the person would type it, which the app's indicator
-    // follows; the model before and after says whether it took
-    const before = await $.session.model()
-    if (pending.model && pending.model !== before) {
-      const wanted = pending.model
-      let note = ''
-      try {
-        const r = await $.command.run({ command: 'model', args: wanted })
-        note = r.text ? trim(r.text, 120) : ''
-      } catch (error) {
-        note = trim(String(error), 120)
-      }
-      const after = await $.session.model()
-      const tail = note ? ` (${note})` : ''
-      $.ui.log(
-        after !== before
-          ? `hand-off: model ${before} → ${after}, as the previous session had${tail}`
-          : `hand-off: model stays ${after}; wanted ${wanted}${tail}`,
-      )
+    // the previous session's model, where the app started this one on
+    // another. /model now would end the turn the opener started (a question
+    // up counts as idle), so the requests are routed and the command waits.
+    if (pending.model && pending.model !== (await $.session.model())) {
+      wantedModel = pending.model
+      $.ui.log(`hand-off: model ${pending.model}, as the previous session had: this turn's requests go there, /model follows after it`)
     }
     $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
@@ -821,6 +838,7 @@ export const register: Register = (on, options) => {
   // A turn that starts without prompt.submit (a session started with a brief)
   // still means someone wrote here.
   on('turn.start', async ($, e, next) => {
+    isTurnRunning = true
     heldTurnId = e.turnId
     // the first turn to start after a hand-off was asked for is the brief's
     if (isHandingOff && handoffTurnId === null) handoffTurnId = e.turnId
@@ -860,6 +878,13 @@ export const register: Register = (on, options) => {
       await settle($)
     }
     return next(e)
+  })
+
+  // Until /model has run, each request of the main loop goes to the
+  // previous session's model.
+  on('turn.step', async function* ($, e, next) {
+    if (!wantedModel || e.agentId !== undefined) return yield* next(e)
+    return yield* next({ ...e, model: wantedModel })
   })
 
   // A session the hand-off link opened reads the brief into its first turn.
@@ -931,6 +956,10 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isTurnRunning = false
+      if (wantedModel) $.clock.after(300, () => void switchModel($))
+    }
     heldTurnId = null
     inFlight.clear()
     waitingIds.clear()
