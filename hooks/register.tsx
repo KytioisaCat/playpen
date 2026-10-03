@@ -505,28 +505,26 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
     const now = await $.clock.now()
     if (pending.cwd !== cwd || !pending.at || now - pending.at > PENDING_MS) return
     await $.fs.write(pendingPath(), '{}')
-    // the previous session's model, where the app started this one on its default
-    if (pending.model && pending.model !== (await $.session.model())) {
+    // the previous session's model, where the app started this one on another:
+    // `/model <id>` as the person would type it, which the app's indicator
+    // follows; the model before and after says whether it took
+    const before = await $.session.model()
+    if (pending.model && pending.model !== before) {
       const wanted = pending.model
-      let isSet = false
+      let note = ''
       try {
-        const row = (await $.config.list()).find(r => r.key === 'model')
-        if (row) {
-          await $.config.set({ key: 'model', value: wanted })
-          isSet = true
-        }
-      } catch {
-        // no such row, or a value the row refuses: try the command
+        const r = await $.command.run({ command: 'model', args: wanted })
+        note = r.text ? trim(r.text, 120) : ''
+      } catch (error) {
+        note = trim(String(error), 120)
       }
-      if (!isSet) {
-        try {
-          await $.command.run({ command: 'model', args: wanted })
-          isSet = true
-        } catch {
-          // the default model stays; the log says so
-        }
-      }
-      $.ui.log(`hand-off: model ${isSet ? 'set to' : 'left at default, wanted'} ${wanted}`)
+      const after = await $.session.model()
+      const tail = note ? ` (${note})` : ''
+      $.ui.log(
+        after !== before
+          ? `hand-off: model ${before} → ${after}, as the previous session had${tail}`
+          : `hand-off: model stays ${after}; wanted ${wanted}${tail}`,
+      )
     }
     $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
@@ -767,6 +765,13 @@ export const register: Register = (on, options) => {
       isPromptUp = true
       await settle($)
     }
+    return next(e)
+  })
+
+  // Every model change in the transcript with who made it, so a hand-off's
+  // own switch and one the app makes afterwards can be told apart.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    $.ui.log(`model: ${e.from_model} → ${e.to_model} (${e.source})`)
     return next(e)
   })
 
