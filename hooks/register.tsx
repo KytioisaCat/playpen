@@ -72,12 +72,13 @@ let hasPrompted = false
 let heldTurnId: string | null = null
 let isHandingOff = false
 let handoffTurnId: string | null = null // the turn that writes the brief
-// the previous session's model, for a session the hand-off link opened: the
-// app started this one on its own choice, and no call from in here changes
-// what the app shows, so each request is routed there instead, until the
-// person picks a model themselves
+// the previous session's model, for a session the hand-off link opened. The
+// app starts the session on the model last picked, and nothing from in here
+// changes that choice or what the app shows. So the first turn alone, the
+// reply to the brief, is answered by the previous model, and the person is
+// told to pick it in the model menu to go on with it. Until the app lets a
+// session be started on a model, nothing more is tried.
 let wantedModel: string | null = null
-let routedTurns = 0
 let isBriefGiven = false
 // ⇢ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
@@ -567,8 +568,12 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
     const appModel = await $.session.model()
     if (pending.model && pending.model !== appModel) {
       wantedModel = pending.model
-      $.ui.log(`hand-off: requests go to ${pending.model}, as the previous session had; the app started this session on ${appModel} and shows that`)
-      $.ui.toast(`Answering with ${pending.model}, as the previous session did. The model menu still shows ${appModel}; pick ${pending.model} there if you want them to agree.`)
+      const notice =
+        `The previous session ran on ${pending.model}. A new session starts on the model last picked, ${appModel}, ` +
+        `so this first reply is answered by ${pending.model}; to go on with it, pick it in the model menu. ` +
+        `Otherwise the next messages use ${appModel}.`
+      $.ui.log(`hand-off: ${notice}`)
+      $.ui.toast(notice)
     }
     $.ui.log('hand-off: this session continues the one that wrote the brief')
   } catch {
@@ -867,8 +872,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // Until /model has run, each request of the main loop goes to the
-  // previous session's model.
+  // The first turn's requests go to the previous session's model.
   on('turn.step', async function* ($, e, next) {
     if (!wantedModel || e.agentId !== undefined) return yield* next(e)
     return yield* next({ ...e, model: wantedModel })
@@ -890,10 +894,6 @@ export const register: Register = (on, options) => {
   // own switch and one the app makes afterwards can be told apart.
   on('classic.PostModelSwitch', async ($, e, next) => {
     $.ui.log(`model: ${e.from_model} → ${e.to_model} (${e.source})`)
-    if (wantedModel && (e.source === 'picker' || e.source === 'command')) {
-      $.ui.log(`hand-off: requests follow your choice, ${e.to_model}, from here`)
-      wantedModel = null
-    }
     return next(e)
   })
 
@@ -972,9 +972,9 @@ export const register: Register = (on, options) => {
       void suggestFallback($, reply)
     }
     const r = await next(e)
-    if (wantedModel && e.agentId === undefined && routedTurns < 3) {
-      routedTurns++
-      $.ui.log(`hand-off: this turn was answered by ${r.usage?.model ?? 'a model the engine did not name'}`)
+    if (wantedModel && e.agentId === undefined) {
+      wantedModel = null
+      $.ui.log(`hand-off: the first reply was answered by ${r.usage?.model ?? 'a model the engine did not name'}; from here the model menu decides`)
     }
     return r
   })
