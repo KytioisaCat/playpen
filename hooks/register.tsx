@@ -755,41 +755,71 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    const columns = e.props.bodyColumns
     // three cards across; each is two rows inside a thin frame: the lamp,
-    // label, hand-off and ×, then the gist
-    const cardWidth = Math.max(
-      MIN_CARD,
-      Math.min(MAX_CARD, Math.floor((e.props.bodyColumns - (PER_ROW - 1) * 2) / PER_ROW)),
-    )
+    // label, hand-off, reply and ×, then the gist
+    const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((columns - (PER_ROW - 1)) / PER_ROW)))
+    const perRow = Math.max(1, Math.floor((columns + 1) / (cardWidth + 1)))
     const inner = cardWidth - 4 // less the frame and its padding
     const labelMax = Math.max(8, inner - 8) // room for ⇢ ↩ ×
 
+    // The popover: twice a card wide, drawn over the neighbours and never in
+    // the flow, so no card moves when it shows. The band clips at its own
+    // edge, so rows are reserved under the cards for the tallest popover
+    // that may show, and none when no card has one.
+    const wide = Math.min(columns, cardWidth * 2 + 1)
+    const wideInner = wide - 4
+    const rowsOf = (text: string, width: number) => Math.max(1, Math.ceil(text.length / Math.max(1, width)))
+    const popoverRows = (card: Card) => {
+      let rows = 2 // the frame
+      if (trim(card.title, LABEL_MAX) !== card.label) rows += rowsOf(card.title, wideInner)
+      if (card.question) {
+        rows += rowsOf(card.question.text, wideInner)
+        for (const option of card.question.options) rows += rowsOf(option, wideInner - 4)
+      } else {
+        rows += rowsOf(card.snippet || stateWord(card.state), wideInner)
+        if (card.suggestion) rows += rowsOf(card.suggestion, wideInner - 9)
+      }
+      return rows
+    }
+    // a red card with a question shows its popover under the pointer; any
+    // card shows it while open with ↩
+    const hasPopover = (card: Card) => openId === card.id || (card.state === 'waiting' && card.question !== null)
+    const cardRowCount = Math.ceil(deck.length / perRow)
+    let reserve = 0
+    deck.forEach((card, i) => {
+      if (!hasPopover(card)) return
+      const rowsBelow = cardRowCount - 1 - Math.floor(i / perRow)
+      // the popover starts on the card's bottom border and runs down past
+      // the card rows beneath it
+      reserve = Math.max(reserve, popoverRows(card) - 1 - rowsBelow * 4)
+    })
+    reserve = Math.max(0, Math.min(reserve, e.props.maxRows - cardRowCount * 4))
+
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-        {deck.map(card => {
-          const isMe = me !== null && card.id === me.id
-          const isOpen = openId === card.id
-          const options = card.question?.options ?? []
-          // An open card takes two places. A closed one has a minimum width
-          // only, so the expanded part, drawn wider, can pull the card out
-          // when the surface reveals it under the pointer.
-          const wide = Math.min(e.props.bodyColumns, cardWidth * 2 + 1)
-          const width = isOpen ? wide : cardWidth
-          const room = width - 4
-          return (
-            // a thin frame around the whole card: dim, full strength on this
-            // session, and the surface brightens it under the pointer by itself
-            <Box
-              key={`card:${card.id}`}
-              flexDirection="column"
-              {...(isOpen ? { width } : { minWidth: width })}
-              paddingX={1}
-              borderStyle="round"
-              borderDimColor={!isMe}
-              hover={{ borderDimColor: false }}
-            >
-              <Box flexDirection="column">
-                <Box flexDirection="row" justifyContent="space-between" width={room}>
+      <Box flexDirection="column">
+        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+          {deck.map((card, i) => {
+            const isMe = me !== null && card.id === me.id
+            const isOpen = openId === card.id
+            const options = card.question?.options ?? []
+            // a popover that would run past the band's right edge hangs from
+            // the card's right edge instead
+            const column = (i % perRow) * (cardWidth + 1)
+            const anchorRight = column + wide > columns
+            return (
+              // a thin frame around the whole card: dim, full strength on this
+              // session, and the surface brightens it under the pointer by itself
+              <Box
+                key={`card:${card.id}`}
+                flexDirection="column"
+                width={cardWidth}
+                paddingX={1}
+                borderStyle="round"
+                borderDimColor={!isMe}
+                hover={{ borderDimColor: false }}
+              >
+                <Box flexDirection="row" justifyContent="space-between">
                   <Box flexDirection="row" gap={1} overflow="hidden">
                     <Text color={lampColor(card.state)}>●</Text>
                     <Button
@@ -827,78 +857,84 @@ export const register: Register = (on, options) => {
                   </Box>
                 </Box>
                 {/* Row two is always the short form: the gist, red while the
-                    session needs you. The question itself lives in the expanded
-                    part only, so hovering never shows it twice. */}
-                <Box width={room}>
-                  <Text color={card.state === 'waiting' ? 'red' : undefined} dimColor={card.state !== 'waiting'} wrap="truncate-end">
-                    {card.gist || (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
-                  </Text>
-                </Box>
-                {/* The expanded part: the full title where it adds to the label,
-                    the whole question with one row per option (a small numbered
-                    button, the text wrapped beside it), or the latest reply in
-                    full and the suggestion with a send button. Shown while the
-                    card is open; otherwise drawn hidden and wide, and the surface
-                    reveals it under the pointer. */}
-                {/* Only a red card with a question expands under the pointer;
-                    a working or done card stays put while the pointer crosses
-                    the board, and opens with ↩ alone. */}
-                {(isOpen || (card.state === 'waiting' && card.question !== null)) && (
-                <Box
-                  flexDirection="column"
-                  width={wide - 4}
-                  display={isOpen ? 'flex' : 'none'}
-                  {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
+                    session needs you. The question itself lives in the popover. */}
+                <Text
+                  color={card.state === 'waiting' ? 'red' : undefined}
+                  dimColor={card.state !== 'waiting'}
+                  wrap="truncate-end"
                 >
-                  {trim(card.title, LABEL_MAX) !== card.label && (
-                    <Text bold wrap="wrap">
-                      {card.title}
-                    </Text>
-                  )}
-                  {card.question && (
-                    <Text color="red" wrap="wrap">
-                      {card.question.text}
-                    </Text>
-                  )}
-                  {options.length > 0 ? (
-                    options.map((label, i) => (
-                      <Box key={`option:${card.id}:${i}`} flexDirection="row" gap={1}>
+                  {card.gist ||
+                    (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
+                </Text>
+                {hasPopover(card) && (
+                  // The popover: the full title where it adds to the label, the
+                  // whole question with one row per option (a small numbered
+                  // button, the text wrapped beside it), or the latest reply in
+                  // full and the suggestion with a send button. Shown while the
+                  // card is open; otherwise drawn hidden, and the surface reveals
+                  // it while the pointer is over the card or the popover itself.
+                  <Box
+                    position="absolute"
+                    top={2}
+                    {...(anchorRight ? { right: -2 } : { left: -2 })}
+                    width={wide}
+                    flexDirection="column"
+                    paddingX={1}
+                    borderStyle="round"
+                    borderColor={card.state === 'waiting' ? 'red' : undefined}
+                    display={isOpen ? 'flex' : 'none'}
+                    {...(isOpen ? {} : { hover: { display: 'flex' as const } })}
+                  >
+                    {trim(card.title, LABEL_MAX) !== card.label && (
+                      <Text bold wrap="wrap">
+                        {card.title}
+                      </Text>
+                    )}
+                    {card.question && (
+                      <Text color="red" wrap="wrap">
+                        {card.question.text}
+                      </Text>
+                    )}
+                    {options.length > 0 ? (
+                      options.map((label, n) => (
+                        <Box key={`option:${card.id}:${n}`} flexDirection="row" gap={1}>
+                          <Button
+                            key={`answer:${card.id}:${label}`}
+                            plain
+                            hotkey={String(n + 1)}
+                            label={`[${n + 1}]`}
+                            onPress={() => void answer($, card, isMe, label)}
+                          />
+                          <Box width={wideInner - 4}>
+                            <Text wrap="wrap">{label}</Text>
+                          </Box>
+                        </Box>
+                      ))
+                    ) : (
+                      <Text dimColor wrap="wrap">
+                        {card.snippet || stateWord(card.state)}
+                      </Text>
+                    )}
+                    {options.length === 0 && card.suggestion && (
+                      <Box flexDirection="row" gap={1}>
                         <Button
-                          key={`answer:${card.id}:${label}`}
-                          plain
-                          hotkey={String(i + 1)}
-                          label={`[${i + 1}]`}
-                          onPress={() => void answer($, card, isMe, label)}
+                          key={`suggest:${card.id}`}
+                          variant="primary"
+                          label="send"
+                          onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
                         />
-                        <Box width={wide - 8}>
-                          <Text wrap="wrap">{label}</Text>
+                        <Box width={wideInner - 9}>
+                          <Text wrap="wrap">{card.suggestion}</Text>
                         </Box>
                       </Box>
-                    ))
-                  ) : (
-                    <Text dimColor wrap="wrap">
-                      {card.snippet || stateWord(card.state)}
-                    </Text>
-                  )}
-                  {options.length === 0 && card.suggestion && (
-                    <Box flexDirection="row" gap={1}>
-                      <Button
-                        key={`suggest:${card.id}`}
-                        variant="primary"
-                        label="send"
-                        onPress={() => void answer($, card, isMe, card.suggestion ?? '')}
-                      />
-                      <Box width={wide - 13}>
-                        <Text wrap="wrap">{card.suggestion}</Text>
-                      </Box>
-                    </Box>
-                  )}
-                </Box>
+                    )}
+                  </Box>
                 )}
               </Box>
-            </Box>
-          )
-        })}
+            )
+          })}
+        </Box>
+        {reserve > 0 && <Box height={reserve} />}
       </Box>
     )
   })
