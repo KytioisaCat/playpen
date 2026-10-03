@@ -576,12 +576,13 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
   }
 }
 
-// The app starts a session from the link on its model picker's last choice,
-// whichever session asked, and in the folder of its own choosing. So the new
-// session's model is set from here, the app's way, once the app lists it:
-// the first session that was not there before the link opened. The app may
-// ask before it switches another session; the log says what came of it.
-const CARRY_MS = 5 * 60 * 1000
+// The app starts a session from the link in the folder and on the model of
+// its own last choices, whatever the link names. The new session's own
+// switchboard sets the model and folder from the marker; from here, the
+// first session the app lists after the link opened is named once in the
+// log, with where it opened. (Setting its model from here through the app
+// asks the person each time; the marker needs no one.)
+const WATCH_MS = 5 * 60 * 1000
 
 async function listApp($: EngineInterface): Promise<AppSession[]> {
   const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 20 })
@@ -590,43 +591,28 @@ async function listApp($: EngineInterface): Promise<AppSession[]> {
   return Array.isArray(rows) ? (rows as AppSession[]) : []
 }
 
-async function carryModel($: EngineInterface, cwd: string, model: string, known: Set<string>, since: number) {
-  let isDone = false
+function watchNewSession($: EngineInterface, cwd: string, known: Set<string>, since: number) {
+  let isBusy = false
   const timer = $.clock.every(POLL_MS, () => void tick())
-  const finish = (line: string) => {
-    if (isDone) return
-    isDone = true
-    timer.cancel()
-    $.ui.log(line)
-  }
   async function tick() {
-    if (isDone) return
+    if (isBusy) return
+    isBusy = true
     try {
-      if ((await $.clock.now()) - since > CARRY_MS) {
-        finish(`hand-off: model ${model} not carried over; no new session in this folder within ${CARRY_MS / 60_000} minutes`)
+      if ((await $.clock.now()) - since > WATCH_MS) {
+        timer.cancel()
+        $.ui.log(`hand-off: no new session seen within ${WATCH_MS / 60_000} minutes`)
         return
       }
       const fresh = (await listApp($)).find(s => s.sessionId && !s.isArchived && !known.has(s.sessionId))
       if (!fresh?.sessionId) return
-      const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: fresh.sessionId })
-      const now = r.isError ? undefined : (JSON.parse(mcpText(r)) as AppSession).model
-      if (fresh.cwd && !sameWorkspace(fresh.cwd, cwd)) $.ui.log(`hand-off: the new session ${fresh.sessionId} opened in ${fresh.cwd}, not ${cwd}`)
-      if (!model) {
-        finish(`hand-off: the new session ${fresh.sessionId} keeps the app's model; this session's was not known`)
-        return
-      }
-      if (now === model) {
-        finish(`hand-off: the new session ${fresh.sessionId} already runs on ${model}`)
-        return
-      }
-      const set = await $.mcp.call('ccd_session_mgmt', 'set_session_model', { session_id: fresh.sessionId, model })
-      finish(
-        set.isError
-          ? `hand-off: model ${model} refused for the new session ${fresh.sessionId} (${trim(mcpText(set), 200)})`
-          : `hand-off: model ${model} set on the new session ${fresh.sessionId}, which started on ${now ?? 'an unknown model'}`,
-      )
+      timer.cancel()
+      const where = fresh.cwd && !sameWorkspace(fresh.cwd, cwd) ? ` in ${fresh.cwd}, not this folder` : ' in this folder'
+      $.ui.log(`hand-off: the new session ${fresh.sessionId} opened${where}`)
     } catch (error) {
-      finish(`hand-off: model not carried over: ${trim(String(error), 160)}`)
+      timer.cancel()
+      $.ui.log(`hand-off: could not watch for the new session: ${trim(String(error), 160)}`)
+    } finally {
+      isBusy = false
     }
   }
 }
@@ -668,7 +654,7 @@ async function finishHandoff($: EngineInterface) {
   // short, because it rides in the link that opens the new session
   const opener =
     `Continue the work handed off from the session "${title}". ` +
-    `Its brief is in your context (also saved at ${briefPath}); it is the whole history. Pick up from its next steps.` +
+    'Its brief is in your context; it is the whole history. Pick up from its next steps.' +
     (isScratch(me.cwd) ? '' : ` The work is in ${me.cwd}: if this session is not in that folder, move there first with change_directory.`)
 
   let started = ''
@@ -728,7 +714,7 @@ async function finishHandoff($: EngineInterface) {
       const r = await $.process.run(['open', url])
       if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
       started = 'through the new-session link'
-      void carryModel($, me.cwd, model, known, at)
+      watchNewSession($, me.cwd, known, at)
     } catch (error2) {
       $.ui.log(`hand-off: could not open the new-session link: ${trim(String(error2), 200)}`)
     }
