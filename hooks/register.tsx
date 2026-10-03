@@ -840,6 +840,10 @@ export const register: Register = (on, options) => {
                     full and the suggestion with a send button. Shown while the
                     card is open; otherwise drawn hidden and wide, and the surface
                     reveals it under the pointer. */}
+                {/* Only a red card with a question expands under the pointer;
+                    a working or done card stays put while the pointer crosses
+                    the board, and opens with ↩ alone. */}
+                {(isOpen || (card.state === 'waiting' && card.question !== null)) && (
                 <Box
                   flexDirection="column"
                   width={wide - 4}
@@ -890,6 +894,7 @@ export const register: Register = (on, options) => {
                     </Box>
                   )}
                 </Box>
+                )}
               </Box>
             </Box>
           )
