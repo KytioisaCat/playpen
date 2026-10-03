@@ -532,16 +532,21 @@ function readPending($: EngineInterface): Promise<Pending | null> {
 
 // The brief, for the first turn's context: the new session reads it here,
 // whatever folder the app put it in, so no file read is asked of the model.
-async function briefContext($: EngineInterface): Promise<string | null> {
-  const pending = await readPending($)
-  if (!pending?.briefPath) return null
-  try {
-    const text = await $.fs.read(pending.briefPath)
-    return `The switchboard mod handed this session off from the session "${pending.title ?? ''}". Its brief, also saved at ${pending.briefPath}:\n\n${text}`
-  } catch (error) {
-    $.ui.log(`hand-off: the brief at ${pending.briefPath} could not be read: ${trim(String(error), 160)}`)
-    return null
-  }
+let briefRead: Promise<string | null> | null = null
+
+function briefContext($: EngineInterface): Promise<string | null> {
+  briefRead ??= (async () => {
+    const pending = await readPending($)
+    if (!pending?.briefPath) return null
+    try {
+      const text = await $.fs.read(pending.briefPath)
+      return `The switchboard mod handed this session off from the session "${pending.title ?? ''}". Its brief, also saved at ${pending.briefPath}:\n\n${text}`
+    } catch (error) {
+      $.ui.log(`hand-off: the brief at ${pending.briefPath} could not be read: ${trim(String(error), 160)}`)
+      return null
+    }
+  })()
+  return briefRead
 }
 
 async function takePendingHandoff($: EngineInterface, cwd: string) {
@@ -810,7 +815,12 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now() })
-    return next(e)
+    if (isBriefGiven) return next(e)
+    isBriefGiven = true
+    const brief = await briefContext($)
+    if (!brief) return next(e)
+    $.ui.log(`hand-off: the brief, ${brief.length} characters, goes with this prompt`)
+    return next({ ...e, context: [...(e.context ?? []), brief] })
   })
 
   // A turn that starts without prompt.submit (a session started with a brief)
@@ -864,16 +874,16 @@ export const register: Register = (on, options) => {
     return yield* next({ ...e, model: wantedModel })
   })
 
-  // A session the hand-off link opened: the brief goes with the first prompt,
-  // read here, so the model is not sent to a file it may not be allowed to read.
-  on('classic.UserPromptSubmit', async ($, e, next) => {
+  // A session the hand-off link opened: the brief is a block of the
+  // conversation's first message, however the opener was sent in.
+  on('prompt.context', async ($, e, next) => {
     const r = await next(e)
     if (isBriefGiven) return r
-    isBriefGiven = true
     const brief = await briefContext($)
     if (!brief) return r
-    $.ui.log(`hand-off: the brief, ${brief.length} characters, goes with this prompt`)
-    return { ...r, additionalContext: [...(r.additionalContext ?? []), brief] }
+    isBriefGiven = true
+    $.ui.log(`hand-off: the brief, ${brief.length} characters, opens this conversation's context`)
+    return { ...r, blocks: [...r.blocks, { name: 'switchboardHandoff', text: brief }] }
   })
 
   // Every model change in the transcript with who made it, so a hand-off's
