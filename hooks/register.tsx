@@ -486,10 +486,16 @@ async function startHandoff($: EngineInterface) {
   void $.prompt.submit({ text: HANDOFF_ASK, asUser: true })
 }
 
-// Step two: start a fresh session in the same folder with the brief as its
-// first prompt, let it stand on its own in the sidebar, and retire this card.
-// The new session's card takes this folder's place on the board. Each step
-// leaves a line in the transcript, so a failure can be read afterwards.
+// Step two: save the brief as a file, start a fresh session in the same
+// folder that reads it first, and retire this card. The new session's card
+// takes this folder's place on the board. Each step leaves a line in the
+// transcript, so a failure can be read afterwards.
+//
+// Two ways to start the session. The app's `start_session` tool inherits
+// model, effort and permission mode, but it is behind a feature flag and not
+// offered to every session. The app's own deep link,
+// `claude://code/new?folder=…&q=…`, opens the new-session flow with the
+// folder chosen and the prompt filled in, and works everywhere the app does.
 async function finishHandoff($: EngineInterface) {
   if (!me) return
   const brief = await lastReply($)
@@ -499,23 +505,40 @@ async function finishHandoff($: EngineInterface) {
     $.ui.toast('Hand-off: no brief was written')
     return
   }
-  $.ui.log(`hand-off: brief of ${brief.length} characters; starting a new session in ${me.cwd}`)
+  const title = me.title.replace(/ \(continued\)$/, '')
+  const stamp = new Date(await $.clock.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'
+  const briefPath = `${home}/.claude/switchboard/handoff/${stamp}-${slug}.md`
+  try {
+    await $.fs.write(
+      briefPath,
+      `# Hand-off brief: ${title}\n\nFrom a Claude Code session in \`${me.cwd}\`, written by that session on ${stamp.slice(0, 10)} so a fresh session can continue its work.\n\n${brief}\n`,
+    )
+  } catch (error) {
+    $.ui.log(`hand-off: could not save the brief: ${trim(String(error), 200)}`)
+  }
+  $.ui.log(`hand-off: brief of ${brief.length} characters saved to ${briefPath}`)
+  const opener =
+    `Continue the work handed off from the session "${title}" in this folder. ` +
+    `Read the brief at ${briefPath} first; it is the whole history. Then pick up from its next steps.`
+
+  let started = ''
   try {
     const r = await $.mcp.call('ccd_session', 'start_session', {
       initiation: 'user_asked',
       context: 'fresh',
-      title: trim(me.title.replace(/ \(continued\)$/, ''), 50) + ' (continued)',
-      prompt: `This session continues an earlier one in the same folder. Brief from the previous session:\n\n${brief}\n\nPick up from the next steps.`,
+      title: trim(title, 50) + ' (continued)',
+      prompt: opener,
       background:
-        `Started by the switchboard mod as a hand-off from the session "${me.title}" in ${me.cwd}, ` +
-        'whose context was getting long. The prompt is the brief that session wrote about its own work; ' +
-        'treat it as the whole history.',
+        `Started by the switchboard mod as a hand-off from the session "${title}" in ${me.cwd}, ` +
+        'whose context was getting long. The brief that session wrote about its own work is at ' +
+        `${briefPath}; treat it as the whole history.`,
       use_worktree: false,
     })
     const text = mcpText(r)
-    $.ui.log(`hand-off: start_session answered${r.isError ? ' with an error' : ''}: ${trim(text, 300)}`)
     if (r.isError) throw new Error(text)
     const newId = text.match(/local_[0-9a-f-]+/)?.[0]
+    $.ui.log(`hand-off: start_session answered: ${trim(text, 200)}`)
     if (newId) {
       // off the parent's thread in the sidebar: it is a continuation, not a side task
       try {
@@ -523,28 +546,35 @@ async function finishHandoff($: EngineInterface) {
       } catch {
         // stays nested; the board does not care
       }
-    } else {
-      $.ui.log('hand-off: no session id in the answer; the card stays until you confirm the new session exists')
+      void jumpTo($, newId)
     }
-    await writeMe($, { isRetired: true })
-    $.ui.log(`hand-off: done; this card retires${newId ? `, new session ${newId}` : ''}`)
-    $.ui.toast('Handed off to a new session; this card retires')
-    void jumpTo($, newId)
+    started = 'through start_session'
   } catch (error) {
-    // the app may not offer start_session here: leave the brief on the
-    // clipboard so a new session can be started by hand and the brief pasted
-    const reason = trim(String(error), 300)
-    $.ui.log(`hand-off: could not start the new session: ${reason}. The brief is on the clipboard.`)
+    $.ui.log(`hand-off: start_session is not available here (${trim(String(error), 120)}); opening the app's new-session link`)
+    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}&q=${encodeURIComponent(opener)}`
     try {
-      await $.ui.copy({ text: brief })
-    } catch {
-      // then it is in this transcript, just above
+      const r = await $.process.run(['open', url])
+      if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
+      started = 'through the new-session link'
+    } catch (error2) {
+      $.ui.log(`hand-off: could not open the new-session link: ${trim(String(error2), 200)}`)
     }
-    $.ui.toast('Hand-off: could not start a session; brief copied to the clipboard')
-  } finally {
-    isHandingOff = false
-    handoffTurnId = null
   }
+
+  if (started) {
+    await writeMe($, { isRetired: true })
+    $.ui.log(`hand-off: new session started ${started}; this card retires`)
+    $.ui.toast('Handed off: new session opening with the brief; this card retires')
+  } else {
+    try {
+      await $.ui.copy({ text: `Read the hand-off brief at ${briefPath} first, then continue from its next steps.` })
+    } catch {
+      // the path is in this transcript, just above
+    }
+    $.ui.toast('Hand-off: could not start a session; the brief is saved and its path copied')
+  }
+  isHandingOff = false
+  handoffTurnId = null
 }
 
 // The first press on ⇢ arms the card's hand-off and shows it plainly; the
