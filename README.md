@@ -41,7 +41,7 @@ The mod runs in every session. Each session writes one JSON file about itself to
 
 ### Hand-off
 
-Pressing ⇢ on a card relays `[switchboard] handoff` to that session (or starts it directly on your own card). The session's mod ends any running turn and submits a request for a brief as your prompt. When that turn completes, the mod saves the reply as a brief under `~/.claude/switchboard/handoff/` and starts a fresh session in the same folder whose first prompt points at the brief: through the app.s `start_session` tool where the app offers it (it inherits model, effort and permission mode), else through the app.s own link `claude://code/new?folder=…&q=…`, which opens the new-session flow with the folder chosen and the prompt filled in; the new session.s own switchboard then sends that prompt, so nothing needs pressing. The old card is retired; the old session stays as it was.
+Pressing ⇢ twice on a card relays `handoff` to that session (or starts it directly on your own card). The session's mod ends any running turn and submits a request for a brief as your prompt. When that turn completes, the mod saves the brief under `~/.claude/switchboard/handoff/` and starts a fresh session in the same folder: through the app's `start_session` tool where the app offers it (it inherits model, effort and permission mode), else through the app's own link `claude://code/new?folder=…`, which opens a new session on the folder. The new session's own switchboard then sets the previous session's model and sends the opener with the brief inside it, so nothing is read from disk, typed or pressed. The old card is retired; the old session stays as it was.
 
 ### Answering from another session
 

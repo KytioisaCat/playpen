@@ -494,21 +494,43 @@ const PENDING_MS = 3 * 60 * 1000
 async function takePendingHandoff($: EngineInterface, cwd: string) {
   try {
     if (!(await $.fs.exists(pendingPath()))) return
-    const pending = JSON.parse(await $.fs.read(pendingPath())) as { cwd?: string; opener?: string; at?: number }
+    const pending = JSON.parse(await $.fs.read(pendingPath())) as {
+      cwd?: string
+      opener?: string
+      model?: string
+      at?: number
+    }
     const now = await $.clock.now()
     if (pending.cwd !== cwd || !pending.opener || !pending.at || now - pending.at > PENDING_MS) return
     if ((await $.session.messages()).length > 0) return
     await $.fs.write(pendingPath(), '{}')
-    $.ui.log('hand-off: continuing from the brief the previous session wrote')
-    // the link's own filled-in draft would otherwise stay in the box
-    try {
-      await $.prompt.fill({ text: '', mode: 'replace' })
-    } catch {
-      // a box that would not clear; the draft is harmless
+    // the previous session's model, where the app started this one on its default
+    if (pending.model && pending.model !== (await $.session.model())) {
+      const wanted = pending.model
+      let isSet = false
+      try {
+        const row = (await $.config.list()).find(r => r.key === 'model')
+        if (row) {
+          await $.config.set({ key: 'model', value: wanted })
+          isSet = true
+        }
+      } catch {
+        // no such row, or a value the row refuses: try the command
+      }
+      if (!isSet) {
+        try {
+          await $.command.run({ command: 'model', args: wanted })
+          isSet = true
+        } catch {
+          // the default model stays; the log says so
+        }
+      }
+      $.ui.log(`hand-off: model ${isSet ? 'set to' : 'left at default, wanted'} ${wanted}`)
     }
+    $.ui.log('hand-off: continuing from the brief the previous session wrote')
     void $.prompt.submit({ text: pending.opener, asUser: true })
   } catch {
-    // an unreadable marker: the person sends the filled-in prompt by hand
+    // an unreadable marker: the opener is on the clipboard, paste it
   }
 }
 
@@ -544,9 +566,12 @@ async function finishHandoff($: EngineInterface) {
     $.ui.log(`hand-off: could not save the brief: ${trim(String(error), 200)}`)
   }
   $.ui.log(`hand-off: brief of ${brief.length} characters saved to ${briefPath}`)
+  // the brief rides in the prompt itself: no file to read, so no permission
+  // prompt about a path outside the project
   const opener =
     `Continue the work handed off from the session "${title}" in this folder. ` +
-    `Read the brief at ${briefPath} first; it is the whole history. Then pick up from its next steps.`
+    'The brief below, written by that session, is the whole history. Pick up from its next steps.\n\n' +
+    `---\n\n${brief}`
 
   let started = ''
   try {
@@ -577,14 +602,27 @@ async function finishHandoff($: EngineInterface) {
     started = 'through start_session'
   } catch (error) {
     $.ui.log(`hand-off: start_session is not available here (${trim(String(error), 120)}); opening the app's new-session link`)
-    // The link fills the prompt in but does not send it. The new session's
-    // own switchboard finds this marker at start and sends it, so no Enter.
+    // The link opens the new session on this folder with an empty box. The
+    // new session's own switchboard finds this marker at start, sets the
+    // model and sends the opener, so nothing is typed or pressed. The opener
+    // also goes to the clipboard, for a session whose switchboard misses it.
+    let model = ''
     try {
-      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, opener, briefPath, at: await $.clock.now() }))
+      model = await $.session.model()
     } catch {
-      // then the person presses Enter on the filled-in prompt
+      // the new session keeps the app's default
     }
-    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}&q=${encodeURIComponent(opener)}`
+    try {
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, opener, model, briefPath, at: await $.clock.now() }))
+    } catch {
+      // then the opener is pasted from the clipboard
+    }
+    try {
+      await $.ui.copy({ text: opener })
+    } catch {
+      // the brief is in the file either way
+    }
+    const url = `claude://code/new?folder=${encodeURIComponent(me.cwd)}`
     try {
       const r = await $.process.run(['open', url])
       if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
