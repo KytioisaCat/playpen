@@ -151,11 +151,13 @@ async function init($: EngineInterface) {
 
 // The app knows this session's id, title and link; the engine's own id is the
 // transcript's name and differs after a resume.
-async function selfApp($: EngineInterface): Promise<{ sessionId?: string; title?: string; link?: string } | null> {
+type AppSession = { sessionId?: string; title?: string; link?: string; cwd?: string; model?: string; isArchived?: boolean }
+
+async function selfApp($: EngineInterface): Promise<AppSession | null> {
   try {
     const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
     if (r.isError) return null
-    return JSON.parse(mcpText(r)) as { sessionId?: string; title?: string; link?: string }
+    return JSON.parse(mcpText(r)) as AppSession
   } catch {
     return null
   }
@@ -532,6 +534,56 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
   }
 }
 
+// The app starts a session from the link on its model picker's last choice,
+// whichever session asked. So the new session's model is set from here, the
+// app's way, once the app lists it: the first session in this folder that
+// was not there before the link opened. The app may ask before it switches
+// another session; the log says what came of it.
+const CARRY_MS = 5 * 60 * 1000
+
+async function listApp($: EngineInterface): Promise<AppSession[]> {
+  const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 20 })
+  if (r.isError) return []
+  const rows = JSON.parse(mcpText(r))
+  return Array.isArray(rows) ? (rows as AppSession[]) : []
+}
+
+async function carryModel($: EngineInterface, cwd: string, model: string, known: Set<string>, since: number) {
+  let isDone = false
+  const timer = $.clock.every(POLL_MS, () => void tick())
+  const finish = (line: string) => {
+    if (isDone) return
+    isDone = true
+    timer.cancel()
+    $.ui.log(line)
+  }
+  async function tick() {
+    if (isDone) return
+    try {
+      if ((await $.clock.now()) - since > CARRY_MS) {
+        finish(`hand-off: model ${model} not carried over; no new session in this folder within ${CARRY_MS / 60_000} minutes`)
+        return
+      }
+      const fresh = (await listApp($)).find(s => s.sessionId && s.cwd === cwd && !s.isArchived && !known.has(s.sessionId))
+      if (!fresh?.sessionId) return
+      const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: fresh.sessionId })
+      const now = r.isError ? undefined : (JSON.parse(mcpText(r)) as AppSession).model
+      if (now === model) {
+        finish(`hand-off: the new session ${fresh.sessionId} already runs on ${model}`)
+        return
+      }
+      const set = await $.mcp.call('ccd_session_mgmt', 'set_session_model', { session_id: fresh.sessionId, model })
+      finish(
+        set.isError
+          ? `hand-off: model ${model} refused for the new session ${fresh.sessionId} (${trim(mcpText(set), 200)})`
+          : `hand-off: model ${model} set on the new session ${fresh.sessionId}, which started on ${now ?? 'an unknown model'}`,
+      )
+    } catch (error) {
+      finish(`hand-off: model not carried over: ${trim(String(error), 160)}`)
+    }
+  }
+}
+
 // Step two: save the brief as a file, start a fresh session in the same
 // folder that reads it first, and retire this card. The new session's card
 // takes this folder's place on the board. Each step leaves a line in the
@@ -605,14 +657,18 @@ async function finishHandoff($: EngineInterface) {
     // sent, so one Enter is the person's; nothing else is. The new session's
     // own switchboard finds this marker at start and sets this session's
     // model there, where the app started it on another.
+    // the model as the app names it, which its picker and set_session_model take
     let model = ''
     try {
-      model = await $.session.model()
+      model = (await selfApp($))?.model || (await $.session.model())
     } catch {
       // the new session keeps the app's default
     }
+    const known = new Set((await listApp($).catch(() => [])).map(s => s.sessionId ?? ''))
+    known.add(me.id)
+    const at = await $.clock.now()
     try {
-      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, at: await $.clock.now() }))
+      await $.fs.write(pendingPath(), JSON.stringify({ cwd: me.cwd, model, briefPath, at }))
     } catch {
       // the model is then the app's choice
     }
@@ -621,6 +677,7 @@ async function finishHandoff($: EngineInterface) {
       const r = await $.process.run(['open', url])
       if (r.exitCode !== 0) throw new Error(r.stderr || `open exited ${r.exitCode}`)
       started = 'through the new-session link'
+      if (model) void carryModel($, me.cwd, model, known, at)
     } catch (error2) {
       $.ui.log(`hand-off: could not open the new-session link: ${trim(String(error2), 200)}`)
     }
