@@ -2,7 +2,7 @@
 
 **Who needs attention?** Your other Claude Code sessions as small cards above the prompt: a lamp for the state, a short label, what just happened, and one press to answer or jump there.
 
-![The playpen band above the prompt in the Claude desktop app: six cards in two rows, one red with an open question](docs/board.png)
+![A pixel-art figure points at a Claude Code window with three session cards above the prompt: one green, one yellow, one red](docs/hero.png)
 
 A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, built on the plugin hooks the desktop app's Code tab and the terminal share. The name is the playpen: the sessions play on their own, and you look up when one of them calls. MIT, one file, nothing leaves your machine except the few words on each card.
 
@@ -11,6 +11,8 @@ A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, 
 Run four or five sessions at once and the question is always the same: *which one is waiting for me?* The sidebar says which sessions exist, not which one just asked something. playpen keeps the sessions you are actually working in in view, right where you type, and turns red when one of them needs you. You answer from where you are, or jump there.
 
 ## What you see
+
+![The playpen band above the prompt in the Claude desktop app: six cards in two rows, one red with an open question](docs/board.png)
 
 | | |
 | :- | :- |
