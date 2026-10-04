@@ -18,7 +18,7 @@ Run four or five sessions at once and the question is always the same: *which on
 | **Label** | what the session is about, in a few words |
 | **Gist** | the state of its latest reply, in a few words; red while a question is open |
 | **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
-| **▸** | answer from here: the open question with its options, or the suggested next prompt with a send button |
+| **►** | answer from here: the open question with its options, or the suggested next prompt with a send button |
 | **×** | hide the card until you write in that session again |
 
 A small model writes the label and gist in the language of the reply; each pair is written once and cached.
