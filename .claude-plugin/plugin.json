@@ -1,9 +1,9 @@
 {
-  "name": "switchboard",
-  "version": "0.8.5-dev.1",
+  "name": "playpen",
+  "version": "0.9.0-dev.1",
   "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": { "name": "Joel Rönnqvist" },
-  "repository": "https://github.com/KytioisaCat/switchboard",
+  "repository": "https://github.com/KytioisaCat/playpen",
   "license": "MIT",
   "keywords": ["mod", "sessions", "overview", "multitasking"],
   "userConfig": {

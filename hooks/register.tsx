@@ -1,10 +1,10 @@
 import type { Register, EngineInterface, PluginOptions } from 'claude-code'
 
-// switchboard: a band above the prompt with one small card per session you
+// playpen: a band above the prompt with one small card per session you
 // are working in right now.
 //
 // The mod runs in every session, and each session writes one JSON file about
-// itself to ~/.claude/switchboard/sessions/<id>.json: its title and link from
+// itself to ~/.claude/playpen/sessions/<id>.json: its title and link from
 // the desktop app, its exact state from the hooks below, the open question
 // with its options, the prompt suggestion, and the engine session id that
 // $.session.send addresses. Every session's band reads that folder.
@@ -55,9 +55,9 @@ const SNIPPET_MAX = 400 // of the latest reply, kept for the expanded card
 const PER_ROW = 3
 const MIN_CARD = 24
 const MAX_CARD = 40
-// a message from another switchboard: consumed by the receiving mod, and
+// a message from another playpen: consumed by the receiving mod, and
 // either submitted as the person's own prompt there or, for HANDOFF, acted on
-const RELAY = '[switchboard] '
+const RELAY = '[playpen] '
 const HANDOFF = 'handoff'
 
 const HANDOFF_ASK =
@@ -149,7 +149,7 @@ function toQuestion(input: unknown): Question | null {
 async function init($: EngineInterface) {
   if (home) return
   home = (await $.env.get('HOME')) ?? '/tmp'
-  ownDir = `${home}/.claude/switchboard/sessions`
+  ownDir = `${home}/.claude/playpen/sessions`
   hidden = ((await $.store.get('hidden')) as Record<string, number> | undefined) ?? {}
   minis = ((await $.store.get('minis-v2')) as Record<string, Mini> | undefined) ?? {}
   slots = ((await $.store.get('slots')) as string[] | undefined) ?? []
@@ -361,7 +361,7 @@ async function hide($: EngineInterface, card: Card) {
 // submits as the person's own prompt. A file, not $.session.send, because a
 // send from a mod has no model request behind it for auto mode's permission
 // classifier to judge, and it is refused.
-const inboxPath = (id: string) => `${home}/.claude/switchboard/inbox/${id}.json`
+const inboxPath = (id: string) => `${home}/.claude/playpen/inbox/${id}.json`
 
 async function readInbox($: EngineInterface, id: string): Promise<string[]> {
   try {
@@ -383,7 +383,7 @@ async function relay($: EngineInterface, card: Card, text: string) {
   }
 }
 
-// This session's side: whatever another switchboard left for it.
+// This session's side: whatever another playpen left for it.
 let isReadingInbox = false
 async function pollInbox($: EngineInterface) {
   if (!me || isReadingInbox) return
@@ -397,7 +397,7 @@ async function pollInbox($: EngineInterface) {
         void startHandoff($)
       } else {
         await applyAnswer($, text)
-        $.ui.toast(`Switchboard: ${trim(text, 40)}`)
+        $.ui.toast(`Playpen: ${trim(text, 40)}`)
       }
     }
   } finally {
@@ -426,7 +426,7 @@ async function answer($: EngineInterface, card: Card, isMe: boolean, text: strin
   $.ui.invalidate('ui.render')
   if (isMe) {
     await applyAnswer($, text)
-    $.ui.toast(`Switchboard: ${trim(text, 40)}`)
+    $.ui.toast(`Playpen: ${trim(text, 40)}`)
   } else {
     await relay($, card, text)
   }
@@ -511,7 +511,7 @@ async function startHandoff($: EngineInterface) {
 // session's model. The opener itself arrives through the link, sent by the
 // person's Enter: the app creates the session only then, so the mod cannot
 // send it first, and must not send it again.
-const pendingPath = () => `${home}/.claude/switchboard/handoff/pending.json`
+const pendingPath = () => `${home}/.claude/playpen/handoff/pending.json`
 // A session with no folder runs in a scratch workspace the app makes, and
 // the app may make a fresh one for the session the link opens; two scratch
 // workspaces count as the same place.
@@ -559,7 +559,7 @@ function briefContext($: EngineInterface): Promise<string | null> {
     if (!pending?.briefPath) return null
     try {
       const text = await $.fs.read(pending.briefPath)
-      return `The switchboard mod handed this session off from the session "${pending.title ?? ''}". Its brief, also saved at ${pending.briefPath}:\n\n${text}`
+      return `The playpen mod handed this session off from the session "${pending.title ?? ''}". Its brief, also saved at ${pending.briefPath}:\n\n${text}`
     } catch (error) {
       $.ui.log(`hand-off: the brief at ${pending.briefPath} could not be read: ${trim(String(error), 160)}`)
       return null
@@ -622,7 +622,7 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
 
 // The app starts a session from the link in the folder and on the model of
 // its own last choices, whatever the link names. The new session's own
-// switchboard sets the model and folder from the marker; from here, the
+// playpen sets the model and folder from the marker; from here, the
 // first session the app lists after the link opened is named once in the
 // log, with where it opened. (Setting its model from here through the app
 // asks the person each time; the marker needs no one.)
@@ -690,7 +690,7 @@ async function finishHandoff($: EngineInterface) {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'
   // inside the project, under its .claude folder: a file there is read
   // without a permission prompt, one outside the working directory is not
-  const briefPath = `${me.cwd}/.claude/switchboard/handoff-${stamp}-${slug}.md`
+  const briefPath = `${me.cwd}/.claude/playpen/handoff-${stamp}-${slug}.md`
   try {
     await $.fs.write(
       briefPath,
@@ -714,7 +714,7 @@ async function finishHandoff($: EngineInterface) {
       title: trim(title, 50) + ' (continued)',
       prompt: opener,
       background:
-        `Started by the switchboard mod as a hand-off from the session "${title}" in ${me.cwd}, ` +
+        `Started by the playpen mod as a hand-off from the session "${title}" in ${me.cwd}, ` +
         'whose context was getting long. The brief that session wrote about its own work is at ' +
         `${briefPath}; treat it as the whole history.`,
       use_worktree: false,
@@ -738,7 +738,7 @@ async function finishHandoff($: EngineInterface) {
     // The link opens the app's new-session page on this folder with the
     // opener filled in. The app creates the session only when that prompt is
     // sent, so one Enter is the person's; nothing else is. The new session's
-    // own switchboard finds this marker at start and sets this session's
+    // own playpen finds this marker at start and sets this session's
     // model there, where the app started it on another.
     // the model as the app names it, which its picker and set_session_model take
     const self = await selfApp($)
@@ -844,7 +844,7 @@ export const register: Register = (on, options) => {
       updatedAt: now,
     }
 
-    await $.command.register({ name: 'board', description: 'Show or hide the switchboard band', immediate: true })
+    await $.command.register({ name: 'board', description: 'Show or hide the playpen band', immediate: true })
 
     // a session the hand-off link opened: send its opener without an Enter
     void takePendingHandoff($, e.cwd)
@@ -887,7 +887,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // The dim suggestion in the prompt box: what another switchboard can send
+  // The dim suggestion in the prompt box: what another playpen can send
   // on your behalf with one press.
   on('prompt.suggest', async ($, e, next) => {
     // recorded whether or not the box could show it: in the desktop app the
@@ -952,7 +952,7 @@ export const register: Register = (on, options) => {
     if (!brief) return r
     isBriefGiven = true
     $.ui.log(`hand-off: the brief, ${brief.length} characters, opens this conversation's context`)
-    return { ...r, blocks: [...r.blocks, { name: 'switchboardHandoff', text: brief }] }
+    return { ...r, blocks: [...r.blocks, { name: 'playpenHandoff', text: brief }] }
   })
 
   // Every model change in the transcript with who made it, so a hand-off's
@@ -998,21 +998,21 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // A relay from another switchboard: never shown to Claude as a message.
+  // A relay from another playpen: never shown to Claude as a message.
   // HANDOFF starts the hand-off here; any other text answers an open question
   // or runs as a prompt, the waiting turn ended first so it does not queue
   // behind the dialog.
   on('session.receive', async ($, e, next) => {
     if (!e.text.startsWith(RELAY) || e.agentId !== undefined) return next(e)
     const text = e.text.slice(RELAY.length).trim()
-    if (!text) return { consumed: 'empty switchboard relay' }
+    if (!text) return { consumed: 'empty playpen relay' }
     if (text === HANDOFF) {
       void startHandoff($)
-      return { consumed: 'switchboard hand-off started' }
+      return { consumed: 'playpen hand-off started' }
     }
     await applyAnswer($, text)
-    $.ui.toast(`Switchboard: ${trim(text, 40)}`)
-    return { consumed: 'switchboard relay submitted as a prompt' }
+    $.ui.toast(`Playpen: ${trim(text, 40)}`)
+    return { consumed: 'playpen relay submitted as a prompt' }
   })
 
   on('turn.complete', async ($, e, next) => {

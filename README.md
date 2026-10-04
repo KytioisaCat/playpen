@@ -1,14 +1,14 @@
-# switchboard
+# playpen
 
-**Your other Claude Code sessions as small cards above the prompt.** A lamp for the state, a short label, what just happened, and one press to answer or jump there.
+**Who needs attention?** Your other Claude Code sessions as small cards above the prompt: a lamp for the state, a short label, what just happened, and one press to answer or jump there.
 
-![The switchboard band above the prompt in the Claude desktop app: six cards in two rows, one red with an open question](docs/board.png)
+![The playpen band above the prompt in the Claude desktop app: six cards in two rows, one red with an open question](docs/board.png)
 
-A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, built on the plugin hooks the desktop app's Code tab and the terminal share. MIT, one file, nothing leaves your machine except the few words on each card.
+A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, built on the plugin hooks the desktop app's Code tab and the terminal share. The name is the playpen: the sessions play on their own, and you look up when one of them calls. MIT, one file, nothing leaves your machine except the few words on each card.
 
 ## Why
 
-Run four or five sessions at once and the question is always the same: *which one is waiting for me?* The sidebar says which sessions exist, not which one just asked something. switchboard keeps the sessions you are actually working in in view, right where you type, and turns red when one of them needs you. You answer from where you are, or jump there.
+Run four or five sessions at once and the question is always the same: *which one is waiting for me?* The sidebar says which sessions exist, not which one just asked something. playpen keeps the sessions you are actually working in in view, right where you type, and turns red when one of them needs you. You answer from where you are, or jump there.
 
 ## What you see
 
@@ -34,8 +34,8 @@ A small model writes the label and gist in the language of the reply; each pair 
 From any Claude Code session:
 
 ```
-/plugin marketplace add KytioisaCat/switchboard
-/plugin install switchboard@kytioisacat
+/plugin marketplace add KytioisaCat/playpen
+/plugin install playpen@kytioisacat
 /reload-plugins
 ```
 
@@ -48,13 +48,13 @@ The install dialog asks for four settings; the defaults are fine.
 | Short labels | on | Let a small model write the label and gist. Off, the card shows the title and the latest reply cut short. |
 | Label model | `haiku` | Model alias or id for the labels. |
 
-To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/switchboard`.
+To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/playpen`.
 
 ## Hand-off
 
-When a session's context has grown long, press ✦ twice on its card. The session writes a brief of its work — the goal, what was done, the decisions and why, the state of the files, the open problems, the next steps — and saves it to `<project>/.claude/switchboard/handoff-<stamp>-<title>.md`. The app's new-session page opens with a short opener filled in; the app creates the session when you send that prompt, so one Enter is yours. The new session's own switchboard then gives the brief to the model as hidden context of that first prompt, moves the session to the project folder if the app opened it elsewhere (you approve the folder once), and keeps the old session's place in the sidebar: its pin and its custom group. The old card retires; the old session stays as it was.
+When a session's context has grown long, press ✦ twice on its card. The session writes a brief of its work — the goal, what was done, the decisions and why, the state of the files, the open problems, the next steps — and saves it to `<project>/.claude/playpen/handoff-<stamp>-<title>.md`. The app's new-session page opens with a short opener filled in; the app creates the session when you send that prompt, so one Enter is yours. The new session's own playpen then gives the brief to the model as hidden context of that first prompt, moves the session to the project folder if the app opened it elsewhere (you approve the folder once), and keeps the old session's place in the sidebar: its pin and its custom group. The old card retires; the old session stays as it was.
 
-**The model is the one thing it cannot carry.** The app starts every new session on the model last picked in its menu, whichever session asked for the hand-off, and nothing a session does from inside changes that choice or what the app shows. So when the two differ, switchboard answers the first reply with the previous session's model and tells you, in a toast and a transcript line, to pick that model in the menu if you want to go on with it; otherwise the next messages use the app's choice. When the models are the same, nothing is said. This stays until the app lets a session be started on a model.
+**The model is the one thing it cannot carry.** The app starts every new session on the model last picked in its menu, whichever session asked for the hand-off, and nothing a session does from inside changes that choice or what the app shows. So when the two differ, playpen answers the first reply with the previous session's model and tells you, in a toast and a transcript line, to pick that model in the menu if you want to go on with it; otherwise the next messages use the app's choice. When the models are the same, nothing is said. This stays until the app lets a session be started on a model.
 
 ## Requirements and limits
 
@@ -65,13 +65,13 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 
 ## How it works
 
-The mod runs in every session. Each session writes one JSON file about itself to `~/.claude/switchboard/sessions/`: its title and link from the desktop app, its state from the mod's hooks (a tool call the engine put to a dialog, an `AskUserQuestion` with its options, the end of a turn), and the prompt suggestion. Every session's band reads that folder every few seconds; a file whose heartbeat is older than 45 seconds counts as ended, so a crashed session disappears on its own.
+The mod runs in every session. Each session writes one JSON file about itself to `~/.claude/playpen/sessions/`: its title and link from the desktop app, its state from the mod's hooks (a tool call the engine put to a dialog, an `AskUserQuestion` with its options, the end of a turn), and the prompt suggestion. Every session's band reads that folder every few seconds; a file whose heartbeat is older than 45 seconds counts as ended, so a crashed session disappears on its own.
 
-Answering from another session appends the text to that session's inbox, `~/.claude/switchboard/inbox/<id>.json`. The receiving mod reads its inbox every second, ends the turn that is waiting on the dialog, and submits the text as your own prompt. The hand-off goes the same way, with a marker the new session reads at start.
+Answering from another session appends the text to that session's inbox, `~/.claude/playpen/inbox/<id>.json`. The receiving mod reads its inbox every second, ends the turn that is waiting on the dialog, and submits the text as your own prompt. The hand-off goes the same way, with a marker the new session reads at start.
 
 ## Development
 
-The plugin loads in place from a clone registered as a local marketplace (`claude plugin marketplace add /path/to/switchboard`), so an edit to `hooks/register.tsx` takes effect at `/reload-plugins` or the next session. `claude plugin validate .` reads the marketplace file; to see what the hooks module hooks and calls, validate a copy without `.claude-plugin/marketplace.json`.
+The plugin loads in place from a clone registered as a local marketplace (`claude plugin marketplace add /path/to/playpen`), so an edit to `hooks/register.tsx` takes effect at `/reload-plugins` or the next session. `claude plugin validate .` reads the marketplace file; to see what the hooks module hooks and calls, validate a copy without `.claude-plugin/marketplace.json`.
 
 The engine writes its type declarations into `.claude-plugin/types/` the first time it loads the mod from this folder, and `tsconfig.json` extends them, so an editor or `npx tsc -p .` type-checks the module against the exact build you run.
 
