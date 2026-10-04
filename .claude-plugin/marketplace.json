@@ -1,7 +1,9 @@
 {
-  "name": "switchboard",
-  "description": "switchboard: your other Claude Code sessions as cards above the prompt",
-  "owner": { "name": "Joel Rönnqvist" },
+  "name": "kytioisacat",
+  "description": "Joel Rönnqvist's Claude Code plugins",
+  "owner": {
+    "name": "Joel Rönnqvist"
+  },
   "plugins": [
     {
       "name": "switchboard",

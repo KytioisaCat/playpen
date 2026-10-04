@@ -22,7 +22,7 @@ From a session:
 
 ```
 /plugin marketplace add KytioisaCat/switchboard
-/plugin install switchboard@switchboard
+/plugin install switchboard@kytioisacat
 /reload-plugins
 ```
 
