@@ -1,30 +1,32 @@
 # switchboard
 
-Your other Claude Code sessions as small cards above the prompt: a lamp for the state, a short label, what just happened, and one press to answer or jump there.
+**Your other Claude Code sessions as small cards above the prompt.** A lamp for the state, a short label, what just happened, and one press to answer or jump there.
 
-![The switchboard band above the prompt in the Claude desktop app](docs/board.png)
+![The switchboard band above the prompt in the Claude desktop app: six cards in two rows, one red with an open question](docs/board.png)
 
-A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, for the desktop app's Code tab and the terminal.
+A [mod](https://code.claude.com/docs/en/plugins/mods/overview) for Claude Code, built on the plugin hooks the desktop app's Code tab and the terminal share. MIT, one file, nothing leaves your machine except the few words on each card.
 
 ## Why
 
-Run four or five sessions at once and the question is always the same: which one is waiting for me? The sidebar says which ones exist, not which one just asked something. switchboard keeps the sessions you are actually working in in view, right where you type, and turns red when one of them needs you.
+Run four or five sessions at once and the question is always the same: *which one is waiting for me?* The sidebar says which sessions exist, not which one just asked something. switchboard keeps the sessions you are actually working in in view, right where you type, and turns red when one of them needs you. You answer from where you are, or jump there.
 
 ## What you see
 
-```
-● Paras offline sync   ✦ ▸ ×   ● Newsletter form    ✦ ▸ ×   ● Switchboard mod   ✦ ▸ ×
-  180 tests green                Needs decision: merge?       relay hooked up
-```
+| | |
+| :- | :- |
+| **Lamp** | yellow while Claude works · green when the turn is done · **red when the session needs you** (a permission dialog or a question) · grey when it has ended |
+| **Label** | what the session is about, in a few words |
+| **Gist** | the state of its latest reply, in a few words; red while a question is open |
+| **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
+| **▸** | answer from here: the open question with its options, or the suggested next prompt with a send button |
+| **×** | hide the card until you write in that session again |
+
+A small model writes the label and gist in the language of the reply; each pair is written once and cached.
 
 - **A card exists because you wrote in that session.** It appears at your first prompt there, stays while the session lives and you have written in it within the last 8 hours, and goes when you press ×, close or archive the session, or quit the app. A red card stays until you have dealt with it.
-- **Lamp:** yellow while Claude works, green when the turn is done, red when the session needs you (a permission dialog or a question), grey when it has ended.
-- **Label and gist:** what the session is about, and the state of its latest reply, in a few words each. A small model writes them in the language of the reply; each pair is written once and cached.
 - **Click the label** to jump to that session.
-- **▸ answers from here.** A red card with a question shows the question and its options under the pointer; one press answers it in that session. Any other card shows its latest reply and the suggested next prompt, with a send button.
-- **✦ hands a session off** when its context has grown long: the session writes a brief, a fresh session opens with the brief as context, and the new card takes the old one's place. Two presses: the first arms it, the second runs it. See [Hand-off](#hand-off).
-- **×** hides the card until you write in that session again.
-- **Places belong to projects.** The first card from a folder takes the next free place; a later session in the same folder sits with it. Nothing moves when activity changes.
+- **Places belong to projects.** The first card from a folder takes the next free place; a later session in the same folder sits with it. Nothing moves when activity changes, and nothing moves under the pointer.
+- **Three per row, two rows at most** by default: six sessions in two lines above the prompt. With three or fewer it is one line.
 - `/board` collapses or expands the band.
 
 ## Install
@@ -48,18 +50,18 @@ The install dialog asks for four settings; the defaults are fine.
 
 To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/switchboard`.
 
+## Hand-off
+
+When a session's context has grown long, press ✦ twice on its card. The session writes a brief of its work — the goal, what was done, the decisions and why, the state of the files, the open problems, the next steps — and saves it to `<project>/.claude/switchboard/handoff-<stamp>-<title>.md`. The app's new-session page opens with a short opener filled in; the app creates the session when you send that prompt, so one Enter is yours. The new session's own switchboard then gives the brief to the model as hidden context of that first prompt, moves the session to the project folder if the app opened it elsewhere (you approve the folder once), and keeps the old session's place in the sidebar: its pin and its custom group. The old card retires; the old session stays as it was.
+
+**The model is the one thing it cannot carry.** The app starts every new session on the model last picked in its menu, whichever session asked for the hand-off, and nothing a session does from inside changes that choice or what the app shows. So when the two differ, switchboard answers the first reply with the previous session's model and tells you, in a toast and a transcript line, to pick that model in the menu if you want to go on with it; otherwise the next messages use the app's choice. When the models are the same, nothing is said. This stays until the app lets a session be started on a model.
+
 ## Requirements and limits
 
 - Claude Code 2.1.286 or later. The mod API is early access and may change between releases; a release that breaks the band gets a fix here.
 - The desktop app gives the cards their titles and links and makes the jump work. In a plain terminal a card shows "Untitled session" and the jump copies a link.
 - macOS for the jump (`open claude://…`); elsewhere the link is copied to the clipboard.
-- The hand-off cannot choose the new session's model: see below.
-
-## Hand-off
-
-Pressing ✦ twice on a card asks that session to write a brief of its work: the goal, what was done, the decisions and why, the state of the files, the open problems, the next steps. When the brief is written, the mod saves it to `<project>/.claude/switchboard/handoff-<stamp>-<title>.md` and opens the app's new-session page with a short opener filled in; the app creates the session when you send that prompt, so one Enter is yours. The new session's own switchboard then gives the brief to the model as hidden context of that first prompt, moves the session to the project folder if the app opened it elsewhere (you approve the folder once), and keeps the old session's place in the sidebar: its pin and its custom group. The old card retires; the old session stays as it was.
-
-**The model.** The app starts every new session on the model last picked in its menu, whichever session asked for the hand-off, and nothing a session does from inside changes that choice or what the app shows. So when the two differ, switchboard answers the first reply with the previous session's model and tells you, in a toast and a transcript line, to pick that model in the menu if you want to go on with it; otherwise the next messages use the app's choice. When the models are the same, nothing is said. This stays until the app lets a session be started on a model.
+- The hand-off cannot choose the new session's model (above).
 
 ## How it works
 
