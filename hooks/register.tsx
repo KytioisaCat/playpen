@@ -32,6 +32,7 @@ type Own = {
   state: State
   snippet: string
   question: Question | null
+  permission: string | null // what a permission dialog asks to do, when one is up
   suggestion: string | null
   lastPromptAt: number
   updatedAt: number
@@ -191,8 +192,33 @@ async function writeMe($: EngineInterface, patch: Partial<Own> = {}) {
   }
 }
 
+// What a permission dialog asks to do, in a line: the tool and the part of
+// its input a person decides on.
+function describeCall(tool: string, input: string): string {
+  let args: Record<string, unknown> = {}
+  try {
+    args = JSON.parse(input) as Record<string, unknown>
+  } catch {
+    // the tool's name alone
+  }
+  const pick = ['command', 'file_path', 'path', 'url', 'pattern', 'query'].map(k => args[k]).find(v => typeof v === 'string')
+  const name = tool.startsWith('mcp__') ? tool.split('__').slice(1).join(' ') : tool
+  return trim(pick ? `${name}: ${pick as string}` : name, 160)
+}
+
+function pendingPermission(): string | null {
+  for (const id of waitingIds) {
+    const call = inFlight.get(id)
+    if (call && call.tool !== 'AskUserQuestion') return describeCall(call.tool, call.input)
+  }
+  return isPromptUp ? 'a permission dialog' : null
+}
+
 const settle = ($: EngineInterface) =>
-  writeMe($, { state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working' })
+  writeMe($, {
+    state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working',
+    permission: pendingPermission(),
+  })
 
 async function lastReply($: EngineInterface) {
   const last = [...(await $.session.messages())].reverse().find(m => m.role === 'assistant' && m.text.trim())
@@ -239,8 +265,8 @@ async function readAll($: EngineInterface): Promise<Own[]> {
 
 // the label and gist are made for this title, reply and open question; a
 // change in any of them is a new pair to summarize
-const miniKey = (card: Pick<Card, 'title' | 'snippet' | 'question'>) =>
-  `${card.title}\u0000${card.snippet}\u0000${card.question?.text ?? ''}`
+const miniKey = (card: Pick<Card, 'title' | 'snippet' | 'question' | 'permission'>) =>
+  `${card.title}\u0000${card.snippet}\u0000${card.question?.text ?? ''}\u0000${card.permission ?? ''}`
 
 // One card at a time, so a burst of activity costs one small call per poll
 // and never blocks the band.
@@ -264,7 +290,8 @@ async function summarizeNext($: EngineInterface) {
         'Write in the language of the latest reply; if there is none, the language of the title. Keep proper nouns and technical terms as they are. No other text.',
       prompt:
         `Project folder: ${folder}\nSession title: ${card.title}\nLatest reply from Claude: ${card.snippet || '(nothing yet)'}` +
-        (card.question ? `\nOpen question to the person right now (the gist should say what is asked): ${card.question.text}` : ''),
+        (card.question ? `\nOpen question to the person right now (the gist should say what is asked): ${card.question.text}` : '') +
+        (card.permission ? `\nA permission dialog is waiting for the person right now (the gist should say what it asks to do): ${card.permission}` : ''),
     })
     if (r.isAnswered) {
       const match = r.text.match(/\{[\s\S]*\}/)
@@ -434,6 +461,10 @@ async function answer($: EngineInterface, card: Card, isMe: boolean, text: strin
 
 // ►: opens the answer row when the card has something to answer with.
 function pressAnswer($: EngineInterface, card: Card) {
+  if (card.state === 'waiting' && card.permission) {
+    $.ui.toast(`Asks to run ${card.permission}. A permission is answered in its own session; open it to approve or deny.`)
+    return
+  }
   const hasOptions = card.question !== null && card.question.options.length > 0
   if (!hasOptions && !card.suggestion) {
     $.ui.toast(card.question ? 'That question has no options; open the session' : 'Nothing to answer there yet')
@@ -839,6 +870,7 @@ export const register: Register = (on, options) => {
       state: 'done',
       snippet: await mySnippet($),
       question: null,
+      permission: null,
       suggestion: null,
       lastPromptAt: now,
       updatedAt: now,
@@ -1021,7 +1053,7 @@ export const register: Register = (on, options) => {
     waitingIds.clear()
     isPromptUp = false
     const reply = await lastReply($)
-    await writeMe($, { state: 'done', question: null, snippet: trim(reply, SNIPPET_MAX) })
+    await writeMe($, { state: 'done', question: null, permission: null, snippet: trim(reply, SNIPPET_MAX) })
     void refresh($)
     // the turn that wrote the brief, and no other (not the one a hand-off
     // interrupted, not a subagent's): start the new session from it
@@ -1045,7 +1077,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await writeMe($, { state: 'ended', question: null, suggestion: null })
+    await writeMe($, { state: 'ended', question: null, permission: null, suggestion: null })
     return next(e)
   })
 
@@ -1070,7 +1102,9 @@ export const register: Register = (on, options) => {
     const popoverRows = (card: Card) => {
       let rows = 2 // the frame
       if (trim(card.title, LABEL_MAX) !== card.label) rows += rowsOf(card.title, wideInner)
-      if (card.question) {
+      if (card.permission) {
+        rows += rowsOf(card.permission, wideInner) + 2
+      } else if (card.question) {
         rows += rowsOf(card.question.text, wideInner)
         for (const option of card.question.options) rows += rowsOf(option, wideInner - 4)
       } else {
@@ -1088,7 +1122,7 @@ export const register: Register = (on, options) => {
     // kept. The terminal clips at the band's edge: there a red card shows its
     // question in the card, and rows are reserved while a card is open.
     const isTerminal = e.surface === 'terminal'
-    const asks = (card: Card) => card.state === 'waiting' && card.question !== null
+    const asks = (card: Card) => card.state === 'waiting' && (card.question !== null || !!card.permission)
     // The popover is revealed by the pointer alone, which is the one way the
     // desktop app draws it whole. A red question has one; ► gives any card
     // one for a while, and since the pointer is on the card at the press, it
@@ -1179,7 +1213,7 @@ export const register: Register = (on, options) => {
                   wrap="truncate-end"
                 >
                   {card.gist ||
-                    (card.state === 'waiting' ? (card.question ? 'asks you' : 'needs you') : stateWord(card.state))}
+                    (card.state === 'waiting' ? (card.question ? 'asks you' : card.permission ? 'asks permission' : 'needs you') : stateWord(card.state))}
                 </Text>
                 {/* A terminal only: the card expanded in the flow, taller and
                     never wider. The full title where it adds to the label, then
@@ -1192,12 +1226,33 @@ export const register: Register = (on, options) => {
                         {card.title}
                       </Text>
                     )}
-                    {card.question && (
+                    {card.question && !card.permission && (
                       <Text color="red" wrap="wrap">
                         {card.question.text}
                       </Text>
                     )}
-                    {options.length > 0 ? (
+                    {card.permission ? (
+                      <Box flexDirection="column">
+                        <Text color="red" wrap="wrap">
+                          {`Asks to run ${card.permission}`}
+                        </Text>
+                        <Text dimColor wrap="wrap">
+                          {isMe
+                            ? 'Approve or deny it in the dialog above.'
+                            : 'A permission is answered in its own session; a mod cannot give it.'}
+                        </Text>
+                        {!isMe && (
+                          <Box flexDirection="row">
+                            <Button
+                              key={`goto-in:${card.id}`}
+                              variant="primary"
+                              label="open session"
+                              onPress={() => void jump($, card)}
+                            />
+                          </Box>
+                        )}
+                      </Box>
+                    ) : options.length > 0 ? (
                       options.map((label, n) => (
                         <Box key={`option-in:${card.id}:${n}`} flexDirection="row" gap={1}>
                           <Button
@@ -1217,7 +1272,7 @@ export const register: Register = (on, options) => {
                         {card.snippet || stateWord(card.state)}
                       </Text>
                     )}
-                    {options.length === 0 && card.suggestion && (
+                    {!card.permission && options.length === 0 && card.suggestion && (
                       <Box flexDirection="row" gap={1}>
                         <Button
                           key={`suggest-in:${card.id}`}
@@ -1259,12 +1314,33 @@ export const register: Register = (on, options) => {
                         {card.title}
                       </Text>
                     )}
-                    {card.question && (
+                    {card.question && !card.permission && (
                       <Text color="red" wrap="wrap">
                         {card.question.text}
                       </Text>
                     )}
-                    {options.length > 0 ? (
+                    {card.permission ? (
+                      <Box flexDirection="column">
+                        <Text color="red" wrap="wrap">
+                          {`Asks to run ${card.permission}`}
+                        </Text>
+                        <Text dimColor wrap="wrap">
+                          {isMe
+                            ? 'Approve or deny it in the dialog above.'
+                            : 'A permission is answered in its own session; a mod cannot give it.'}
+                        </Text>
+                        {!isMe && (
+                          <Box flexDirection="row">
+                            <Button
+                              key={`goto-pop:${card.id}`}
+                              variant="primary"
+                              label="open session"
+                              onPress={() => void jump($, card)}
+                            />
+                          </Box>
+                        )}
+                      </Box>
+                    ) : options.length > 0 ? (
                       options.map((label, n) => (
                         <Box key={`option:${card.id}:${n}`} flexDirection="row" gap={1}>
                           <Button
@@ -1284,7 +1360,7 @@ export const register: Register = (on, options) => {
                         {card.snippet || stateWord(card.state)}
                       </Text>
                     )}
-                    {options.length === 0 && card.suggestion && (
+                    {!card.permission && options.length === 0 && card.suggestion && (
                       <Box flexDirection="row" gap={1}>
                         <Button
                           key={`suggest:${card.id}`}

@@ -20,13 +20,14 @@ Run four or five sessions at once and the question is always the same: *which on
 | **Label** | what the session is about, in a few words |
 | **Gist** | the state of its latest reply, in a few words; red while a question is open |
 | **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
-| **►** | answer from here: the open question with its options, or the suggested next prompt with a send button |
+| **►** | answer from here: the open question with its options, or the suggested next prompt with a send button. A permission dialog is the exception: see below |
 | **×** | hide the card until you write in that session again |
 
 A small model writes the label and gist in the language of the reply; each pair is written once and cached.
 
 - **A card exists because you wrote in that session.** It appears at your first prompt there, stays while the session lives and you have written in it within the last 8 hours, and goes when you press ×, close or archive the session, or quit the app. A red card stays until you have dealt with it.
 - **Click the label** to jump to that session.
+- **Permission dialogs are answered in their own session.** A red card for a permission shows what it asks to run (`Bash: git push origin main`) and an **open session** button. Claude Code draws that dialog itself and lets no plugin answer it, since the answer authorises an action; playpen tells you where to go, and you approve or deny there. Questions (`AskUserQuestion`) are plain answers and can be given from any card.
 - **Places belong to projects.** The first card from a folder takes the next free place; a later session in the same folder sits with it. Nothing moves when activity changes, and nothing moves under the pointer.
 - **Three per row, two rows at most** by default: six sessions in two lines above the prompt. With three or fewer it is one line.
 - `/board` collapses or expands the band.
@@ -64,6 +65,7 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 - The desktop app gives the cards their titles and links and makes the jump work. In a plain terminal a card shows "Untitled session" and the jump copies a link.
 - macOS for the jump (`open claude://…`); elsewhere the link is copied to the clipboard.
 - The hand-off cannot choose the new session's model (above).
+- A permission dialog cannot be answered from another session: playpen shows what it asks and takes you there.
 
 ## How it works
 
