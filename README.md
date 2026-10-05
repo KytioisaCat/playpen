@@ -21,7 +21,7 @@ Run four or five sessions at once and the question is always the same: *which on
 | **Gist** | the state of its latest reply, in a few words; red while a question is open |
 | **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
 | **►** | answer from here: the open question with its options, or the suggested next prompt with a send button. A permission dialog is the exception: see below |
-| **×** | hide the card until you write in that session again |
+| **×** | hide the card until you write in that session again, in every session's band |
 
 A small model writes the label and gist in the language of the reply; each pair is written once and cached.
 
@@ -69,7 +69,7 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 
 ## How it works
 
-The mod runs in every session. Each session writes one JSON file about itself to `~/.claude/playpen/sessions/`: its title and link from the desktop app, its state from the mod's hooks (a tool call the engine put to a dialog, an `AskUserQuestion` with its options, the end of a turn), and the prompt suggestion. Every session's band reads that folder every few seconds; a file whose heartbeat is older than 45 seconds counts as ended, so a crashed session disappears on its own.
+The mod runs in every session. Each session writes one JSON file about itself to `~/.claude/playpen/sessions/`: its title and link from the desktop app, its state from the mod's hooks (a tool call the engine put to a dialog, an `AskUserQuestion` with its options, the end of a turn), and the prompt suggestion. The hidden cards and the places on the board are one shared file, `~/.claude/playpen/board.json`, so every band shows the same board. Every session's band reads that folder every few seconds; a file whose heartbeat is older than 45 seconds counts as ended, so a crashed session disappears on its own.
 
 Answering from another session appends the text to that session's inbox, `~/.claude/playpen/inbox/<id>.json`. The receiving mod reads its inbox every second, ends the turn that is waiting on the dialog, and submits the text as your own prompt. The hand-off goes the same way, with a marker the new session reads at start.
 

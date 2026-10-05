@@ -151,10 +151,63 @@ async function init($: EngineInterface) {
   if (home) return
   home = (await $.env.get('HOME')) ?? '/tmp'
   ownDir = `${home}/.claude/playpen/sessions`
-  hidden = ((await $.store.get('hidden')) as Record<string, number> | undefined) ?? {}
   minis = ((await $.store.get('minis-v2')) as Record<string, Mini> | undefined) ?? {}
-  slots = ((await $.store.get('slots')) as string[] | undefined) ?? []
-  order = ((await $.store.get('order')) as string[] | undefined) ?? []
+  if (!(await readBoard($))) {
+    // the first band on the shared board brings what its own store kept
+    await writeBoard($, {
+      hidden: ((await $.store.get('hidden')) as Record<string, number> | undefined) ?? {},
+      slots: ((await $.store.get('slots')) as string[] | undefined) ?? [],
+      order: ((await $.store.get('order')) as string[] | undefined) ?? [],
+    })
+  }
+  await syncBoard($)
+}
+
+// --- the board every session shares ----------------------------------------------
+
+// Hidden cards and the places on the board belong to the person, not to one
+// session: every band reads the same file each poll, and a write merges into
+// what is there, so a card closed in one session is closed in all of them.
+type Board = { hidden: Record<string, number>; slots: string[]; order: string[] }
+
+const boardPath = () => `${home}/.claude/playpen/board.json`
+
+async function readBoard($: EngineInterface): Promise<Board | null> {
+  try {
+    if (!(await $.fs.exists(boardPath()))) return null
+    const b = JSON.parse(await $.fs.read(boardPath())) as Partial<Board>
+    return { hidden: b.hidden ?? {}, slots: b.slots ?? [], order: b.order ?? [] }
+  } catch {
+    return null // half-written: this round keeps what it had
+  }
+}
+
+const union = (a: string[], b: string[]) => [...a, ...b.filter(x => !a.includes(x))]
+
+async function syncBoard($: EngineInterface) {
+  const b = await readBoard($)
+  if (b) {
+    hidden = b.hidden
+    slots = b.slots
+    order = b.order
+  }
+}
+
+async function writeBoard($: EngineInterface, patch: Partial<Board>) {
+  const b = (await readBoard($)) ?? { hidden: {}, slots: [], order: [] }
+  const next: Board = {
+    hidden: { ...b.hidden, ...(patch.hidden ?? {}) },
+    slots: union(b.slots, patch.slots ?? []).slice(-32),
+    order: union(b.order, patch.order ?? []).slice(-64),
+  }
+  hidden = next.hidden
+  slots = next.slots
+  order = next.order
+  try {
+    await $.fs.write(boardPath(), JSON.stringify(next))
+  } catch {
+    // unwritable: this band still keeps it in memory
+  }
 }
 
 // --- this session's own file --------------------------------------------------
@@ -316,6 +369,7 @@ async function summarizeNext($: EngineInterface) {
 
 async function buildDeck($: EngineInterface): Promise<Card[]> {
   const now = await $.clock.now()
+  await syncBoard($)
   const cards: Card[] = []
   for (const o of await readAll($)) {
     if (o.state === 'ended' || o.isRetired) continue
@@ -333,15 +387,8 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
 
   // a folder keeps its place; within it, sessions keep the order they came in
   const newSlots = cards.map(c => c.cwd).filter((cwd, i, all) => !slots.includes(cwd) && all.indexOf(cwd) === i)
-  if (newSlots.length > 0) {
-    slots = [...slots, ...newSlots].slice(-32)
-    await $.store.set('slots', slots)
-  }
   const fresh = cards.map(c => c.id).filter(id => !order.includes(id))
-  if (fresh.length > 0) {
-    order = [...order, ...fresh].slice(-64)
-    await $.store.set('order', order)
-  }
+  if (newSlots.length > 0 || fresh.length > 0) await writeBoard($, { slots: newSlots, order: fresh })
   cards.sort(
     (a, b) => slots.indexOf(a.cwd) - slots.indexOf(b.cwd) || order.indexOf(a.id) - order.indexOf(b.id),
   )
@@ -378,8 +425,7 @@ async function jump($: EngineInterface, card: Card) {
 
 // × hides the card until you write in that session again
 async function hide($: EngineInterface, card: Card) {
-  hidden = { ...hidden, [card.id]: card.lastPromptAt }
-  await $.store.set('hidden', hidden)
+  await writeBoard($, { hidden: { [card.id]: card.lastPromptAt } })
   await refresh($)
 }
 
