@@ -16,7 +16,7 @@ Run four or five sessions at once and the question is always the same: *which on
 
 | | |
 | :- | :- |
-| **Lamp** | yellow while Claude works · green when the turn is done · **red when the session needs you** (a permission dialog or a question) · grey when it has ended |
+| **Lamp** | yellow while Claude works · green when the turn is done · **red when the session needs you** (a permission dialog or a question) · grey while the session rests (its process stopped) |
 | **Label** | what the session is about, in a few words |
 | **Gist** | the state of its latest reply, in a few words; red while a question is open |
 | **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
@@ -25,7 +25,7 @@ Run four or five sessions at once and the question is always the same: *which on
 
 A small model writes the label and gist in the language of the reply; each pair is written once and cached.
 
-- **A card exists because you wrote in that session.** It appears at your first prompt there, stays while the session lives and you have written in it within the last 8 hours, and goes when you press ×, close or archive the session, or quit the app. A red card stays until you have dealt with it.
+- **A card exists because you wrote in that session.** It appears at your first prompt there and stays for 8 hours after you last wrote in it, until you press × or archive the session. When the app stops an idle session's process, or you restart the app, the card rests: grey, with its last summary, and wakes up when you open that session again. A red card stays until you have dealt with it.
 - **Click the label** to jump to that session.
 - **Permission dialogs are answered in their own session.** A red card for a permission shows what it asks to run (`Bash: git push origin main`) and an **open session** button. Claude Code draws that dialog itself and lets no plugin answer it, since the answer authorises an action; playpen tells you where to go, and you approve or deny there. Questions (`AskUserQuestion`) are plain answers and can be given from any card.
 - **Places belong to projects.** The first card from a folder takes the next free place; a later session in the same folder sits with it. Nothing moves when activity changes, and nothing moves under the pointer.

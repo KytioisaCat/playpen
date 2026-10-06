@@ -82,6 +82,7 @@ let handoffTurnId: string | null = null // the turn that writes the brief
 // session be started on a model, nothing more is tried.
 let wantedModel: string | null = null
 let isBriefGiven = false
+let isMachineTurn = false // the latest prompt came from a routine or a task, not you
 // ✦ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
 const ARM_MS = 4_000
@@ -179,6 +180,25 @@ async function readBoard($: EngineInterface): Promise<Board | null> {
     return { hidden: b.hidden ?? {}, slots: b.slots ?? [], order: b.order ?? [] }
   } catch {
     return null // half-written: this round keeps what it had
+  }
+}
+
+// The sessions the app still lists (not archived, not deleted), asked now and
+// then: a card whose process stopped rests on the board while its session is
+// in this list, and goes when it is archived. Unknown, every card rests.
+let appIds: Set<string> | null = null
+let appIdsAt = 0
+const APP_IDS_MS = 30_000
+
+async function syncAppIds($: EngineInterface) {
+  const now = await $.clock.now()
+  if (now - appIdsAt < APP_IDS_MS) return
+  appIdsAt = now
+  try {
+    const rows = await listApp($, 100)
+    if (rows.length > 0) appIds = new Set(rows.map(r => r.sessionId ?? ''))
+  } catch {
+    // keep what was known
   }
 }
 
@@ -283,7 +303,9 @@ const mySnippet = async ($: EngineInterface) => trim(await lastReply($), SNIPPET
 // The heartbeat: proves the session is alive, and picks up a title the app
 // gave the session after its first prompt.
 async function heartbeat($: EngineInterface) {
-  if (!me || !hasPrompted) return
+  if (!me) return
+  const isMadeUp = me.id === `local_${me.engineId}`
+  if (!hasPrompted && !isMadeUp) return
   const self = await selfApp($)
   // The app may not have answered at start, and the card then carries a
   // made-up id whose link the app does not know: take the app's own once it
@@ -291,15 +313,41 @@ async function heartbeat($: EngineInterface) {
   if (me && self?.sessionId && self.sessionId !== me.id) {
     const stale = me
     me = { ...me, id: self.sessionId, link: self.link ?? `claude://claude.ai/epitaxy/${self.sessionId}` }
-    try {
-      await $.fs.write(`${ownDir}/${stale.id}.json`, JSON.stringify({ ...stale, isRetired: true }))
-    } catch {
-      // its heartbeat stops, so it ends on its own
+    if (hasPrompted) {
+      try {
+        await $.fs.write(`${ownDir}/${stale.id}.json`, JSON.stringify({ ...stale, isRetired: true }))
+      } catch {
+        // its heartbeat stops, so it ends on its own
+      }
+    } else {
+      await resumeCard($)
     }
   } else if (me && self?.link && self.link !== me.link) {
     me = { ...me, link: self.link }
   }
+  if (!hasPrompted) return
   await writeMe($, self?.title ? { title: self.title } : {})
+}
+
+// A session whose card is still on the board takes it back when it starts:
+// the app stops idle sessions' processes and starts them again when opened,
+// and that is the same session you were working in, not a look at an old one.
+async function resumeCard($: EngineInterface) {
+  if (!me || hasPrompted) return
+  try {
+    const path = `${ownDir}/${me.id}.json`
+    if (!(await $.fs.exists(path))) return
+    const was = JSON.parse(await $.fs.read(path)) as Own
+    const now = await $.clock.now()
+    const hiddenAt = hidden[me.id]
+    if (was.isRetired || now - was.lastPromptAt > windowMs) return
+    if (hiddenAt !== undefined && was.lastPromptAt <= hiddenAt) return
+    hasPrompted = true
+    await writeMe($, { lastPromptAt: was.lastPromptAt, state: 'done' })
+    void refresh($)
+  } catch {
+    // an unreadable file: the card comes back at your next prompt
+  }
 }
 
 // --- every session's file -----------------------------------------------------
@@ -384,9 +432,13 @@ async function summarizeNext($: EngineInterface) {
 async function buildDeck($: EngineInterface): Promise<Card[]> {
   const now = await $.clock.now()
   await syncBoard($)
+  await syncAppIds($)
   const cards: Card[] = []
   for (const o of await readAll($)) {
-    if (o.state === 'ended' || o.isRetired) continue
+    if (o.isRetired) continue
+    // a stopped process is not a closed session: its card rests until the
+    // session is archived, you press ×, or the window passes
+    if (o.state === 'ended' && appIds && !appIds.has(o.id) && o.id !== me?.id) continue
     const hiddenAt = hidden[o.id]
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
     // a red card stays until handled; the others fall off after the window
@@ -403,10 +455,14 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
   const newSlots = cards.map(c => c.cwd).filter((cwd, i, all) => !slots.includes(cwd) && all.indexOf(cwd) === i)
   const fresh = cards.map(c => c.id).filter(id => !order.includes(id))
   if (newSlots.length > 0 || fresh.length > 0) await writeBoard($, { slots: newSlots, order: fresh })
-  cards.sort(
+  // a full board makes room from its resting cards, the longest unwritten first
+  const resting = cards.filter(c => c.state === 'ended').sort((a, b) => a.lastPromptAt - b.lastPromptAt)
+  const drop = new Set(resting.slice(0, Math.max(0, cards.length - maxCards)).map(c => c.id))
+  const shown = cards.filter(c => !drop.has(c.id))
+  shown.sort(
     (a, b) => slots.indexOf(a.cwd) - slots.indexOf(b.cwd) || order.indexOf(a.id) - order.indexOf(b.id),
   )
-  return cards.slice(0, maxCards)
+  return shown.slice(0, maxCards)
 }
 
 async function refresh($: EngineInterface) {
@@ -521,6 +577,10 @@ async function answer($: EngineInterface, card: Card, isMe: boolean, text: strin
 
 // ►: opens the answer row when the card has something to answer with.
 function pressAnswer($: EngineInterface, card: Card) {
+  if (card.state === 'ended') {
+    $.ui.toast('That session is resting; open it, and its card wakes up')
+    return
+  }
   if (card.state === 'waiting' && card.permission) {
     $.ui.toast(`Asks to run ${card.permission}. A permission is answered in its own session; open it to approve or deny.`)
     return
@@ -719,8 +779,8 @@ async function takePendingHandoff($: EngineInterface, cwd: string) {
 // asks the person each time; the marker needs no one.)
 const WATCH_MS = 5 * 60 * 1000
 
-async function listApp($: EngineInterface): Promise<AppSession[]> {
-  const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 20 })
+async function listApp($: EngineInterface, limit = 20): Promise<AppSession[]> {
+  const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit })
   if (r.isError) return []
   const rows = JSON.parse(mcpText(r))
   return Array.isArray(rows) ? (rows as AppSession[]) : []
@@ -938,6 +998,8 @@ export const register: Register = (on, options) => {
 
     await $.command.register({ name: 'board', description: 'Show or hide the playpen band', immediate: true })
 
+    await resumeCard($)
+
     // a session the hand-off link opened: send its opener without an Enter
     void takePendingHandoff($, e.cwd)
 
@@ -957,6 +1019,12 @@ export const register: Register = (on, options) => {
 
   // Your first prompt is what puts this session on the board.
   on('prompt.submit', async ($, e, next) => {
+    // a routine firing or a background task's notice is not you writing here
+    isMachineTurn = e.origin.kind === 'scheduled-trigger' || e.origin.kind === 'task-notification'
+    if (isMachineTurn) {
+      if (hasPrompted) await writeMe($, { state: 'working', suggestion: null })
+      return next(e)
+    }
     hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now() })
     if (isBriefGiven) return next(e)
@@ -973,6 +1041,7 @@ export const register: Register = (on, options) => {
     heldTurnId = e.turnId
     // the first turn to start after a hand-off was asked for is the brief's
     if (isHandingOff && handoffTurnId === null) handoffTurnId = e.turnId
+    if (!hasPrompted && isMachineTurn) return next(e)
     const isFirst = !hasPrompted
     hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null, ...(isFirst ? { lastPromptAt: await $.clock.now() } : {}) })
