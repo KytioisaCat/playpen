@@ -285,6 +285,20 @@ const mySnippet = async ($: EngineInterface) => trim(await lastReply($), SNIPPET
 async function heartbeat($: EngineInterface) {
   if (!me || !hasPrompted) return
   const self = await selfApp($)
+  // The app may not have answered at start, and the card then carries a
+  // made-up id whose link the app does not know: take the app's own once it
+  // answers, and retire the file under the made-up one.
+  if (me && self?.sessionId && self.sessionId !== me.id) {
+    const stale = me
+    me = { ...me, id: self.sessionId, link: self.link ?? `claude://claude.ai/epitaxy/${self.sessionId}` }
+    try {
+      await $.fs.write(`${ownDir}/${stale.id}.json`, JSON.stringify({ ...stale, isRetired: true }))
+    } catch {
+      // its heartbeat stops, so it ends on its own
+    }
+  } else if (me && self?.link && self.link !== me.link) {
+    me = { ...me, link: self.link }
+  }
   await writeMe($, self?.title ? { title: self.title } : {})
 }
 
