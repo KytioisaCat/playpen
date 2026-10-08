@@ -47,7 +47,13 @@ const POLL_MS = 3_000
 const INBOX_MS = 1_000
 const HEARTBEAT_MS = 10_000
 const STALE_MS = 45_000
-const ASK_MS = 2_500 // an ask still open after this is a dialog, not the classifier
+// An ask still open after this is a dialog. In auto mode an ask goes to the
+// app's classifier first, a model call that takes seconds (13 s seen), and a
+// dialog only follows when it cannot decide; a real dialog waits for you, so
+// a long bound there costs nothing but a late red.
+const ASK_MS = 2_500
+const ASK_AUTO_MS = 30_000
+let sessionMode: string | null = null // the app's permission mode for this session
 const LABEL_MAX = 18
 const GIST_MAX = 22
 const LABEL_ASK = 16
@@ -242,6 +248,7 @@ type AppSession = {
   model?: string
   isArchived?: boolean
   pinned?: boolean
+  permissionMode?: string
   group?: { id: string; name: string } | null
 }
 
@@ -307,6 +314,7 @@ async function heartbeat($: EngineInterface) {
   const isMadeUp = me.id === `local_${me.engineId}`
   if (!hasPrompted && !isMadeUp) return
   const self = await selfApp($)
+  if (self?.permissionMode) sessionMode = self.permissionMode
   // The app may not have answered at start, and the card then carries a
   // made-up id whose link the app does not know: take the app's own once it
   // answers, and retire the file under the made-up one.
@@ -975,6 +983,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await init($)
     const self = await selfApp($)
+    sessionMode = self?.permissionMode ?? null
     const engineId = await $.session.id()
     const id = self?.sessionId ?? `local_${engineId}`
     const now = await $.clock.now()
@@ -1078,7 +1087,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const id = e.tool_use_id
     if (id && r.decision === 'ask') {
-      $.clock.after(ASK_MS, () => {
+      $.clock.after(sessionMode === 'auto' ? ASK_AUTO_MS : ASK_MS, () => {
         if (inFlight.has(id) && !waitingIds.has(id)) {
           waitingIds.add(id)
           void settle($)
