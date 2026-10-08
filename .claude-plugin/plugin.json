@@ -1,6 +1,6 @@
 {
   "name": "playpen",
-  "version": "0.9.3-dev.2",
+  "version": "0.9.3-dev.3",
   "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": {
     "name": "Joel Rönnqvist"
@@ -45,7 +45,7 @@
     "auto_red_seconds": {
       "type": "number",
       "title": "Red after, in auto mode (seconds)",
-      "description": "In auto mode the app's classifier decides most permissions in a few seconds, and a plugin cannot tell its thinking from a dialog waiting for you. A card turns red when a call has waited this long. Lower: earlier red for a real dialog, more false reds. Other modes turn red at once.",
+      "description": "In auto mode the app's classifier decides most permissions in a few seconds, and a plugin cannot tell its thinking from a dialog waiting for you. A card turns red when a call waits for a permission and nothing in the session has moved for this long. Lower: earlier red for a real dialog, more false reds. Other modes turn red at once.",
       "default": 30,
       "min": 3,
       "max": 300

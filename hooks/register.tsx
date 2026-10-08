@@ -295,6 +295,54 @@ function pendingPermission(): string | null {
   return isPromptUp ? 'a permission dialog' : null
 }
 
+// Calls that asked for a permission and have not ended, and when the session
+// last moved: a call started or ended. The app does not tell a plugin when a
+// dialog is up, so a session counts as waiting on you when a call is asking
+// and nothing has moved for the set time; a queue of calls the classifier
+// lets through one by one keeps moving, and stays yellow.
+const asking = new Set<string>()
+const timedIds = new Set<string>() // the asks this wait turned red
+let movedAt = 0
+let isCheckSet = false
+
+const askWaitMs = () => (sessionMode === 'auto' ? askAutoMs : ASK_MS)
+
+async function moved($: EngineInterface) {
+  movedAt = await $.clock.now()
+  if (timedIds.size > 0) {
+    for (const id of timedIds) waitingIds.delete(id)
+    timedIds.clear()
+    await settle($)
+  }
+  scheduleCheck($, askWaitMs())
+}
+
+function scheduleCheck($: EngineInterface, ms: number) {
+  if (isCheckSet || asking.size === 0) return
+  isCheckSet = true
+  $.clock.after(ms, () => {
+    isCheckSet = false
+    void checkStill($)
+  })
+}
+
+async function checkStill($: EngineInterface) {
+  const live = [...asking].filter(id => inFlight.has(id))
+  if (live.length === 0) return
+  const still = (await $.clock.now()) - movedAt
+  if (still < askWaitMs()) {
+    scheduleCheck($, askWaitMs() - still)
+    return
+  }
+  for (const id of live) {
+    if (!waitingIds.has(id)) {
+      waitingIds.add(id)
+      timedIds.add(id)
+    }
+  }
+  await settle($)
+}
+
 const settle = ($: EngineInterface) =>
   writeMe($, {
     state: waitingIds.size > 0 || isPromptUp ? 'waiting' : 'working',
@@ -1088,12 +1136,8 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const id = e.tool_use_id
     if (id && r.decision === 'ask') {
-      $.clock.after(sessionMode === 'auto' ? askAutoMs : ASK_MS, () => {
-        if (inFlight.has(id) && !waitingIds.has(id)) {
-          waitingIds.add(id)
-          void settle($)
-        }
-      })
+      asking.add(id)
+      await moved($)
     }
     return r
   })
@@ -1159,13 +1203,16 @@ export const register: Register = (on, options) => {
       tool_use_id: string
     }
     inFlight.set(tool_use_id, { tool, input: JSON.stringify(input) })
+    await moved($)
     try {
       return await next(e)
     } finally {
       inFlight.delete(tool_use_id)
+      asking.delete(tool_use_id)
       const wasWaiting = waitingIds.delete(tool_use_id) || isPromptUp
       isPromptUp = false
       if (wasWaiting) await settle($)
+      await moved($)
     }
   })
 
@@ -1190,6 +1237,8 @@ export const register: Register = (on, options) => {
     heldTurnId = null
     inFlight.clear()
     waitingIds.clear()
+    asking.clear()
+    timedIds.clear()
     isPromptUp = false
     const reply = await lastReply($)
     await writeMe($, { state: 'done', question: null, permission: null, snippet: trim(reply, SNIPPET_MAX) })
