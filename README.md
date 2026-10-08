@@ -50,6 +50,7 @@ The install dialog asks for four settings; the defaults are fine.
 | Maximum cards | 6 | How many cards the band shows at most, three per row. |
 | Short labels | on | Let a small model write the label and gist. Off, the card shows the title and the latest reply cut short. |
 | Label model | `haiku` | Model alias or id for the labels. |
+| Red after, in auto mode | 30 s | How long a call may wait for a permission in auto mode before the card turns red. See [Permissions in auto mode](#permissions-in-auto-mode). |
 
 To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/playpen`.
 
@@ -59,6 +60,10 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 
 **The model is the one thing it cannot carry.** The app starts every new session on the model last picked in its menu, whichever session asked for the hand-off, and nothing a session does from inside changes that choice or what the app shows. So when the two differ, playpen answers the first reply with the previous session's model and tells you, in a toast and a transcript line, to pick that model in the menu if you want to go on with it; otherwise the next messages use the app's choice. When the models are the same, nothing is said. This stays until the app lets a session be started on a model.
 
+## Permissions in auto mode
+
+In auto mode the app's classifier decides each permission itself, usually in a second or two, sometimes in ten or more, and only now and then leaves it to you as a dialog. A plugin is told that a call needs a permission and when the call is done, but not whether a dialog is up in between: the app keeps that to itself. So in auto mode playpen turns a card red when a call has waited longer than a set time, 30 seconds by default (*Red after, in auto mode*). That keeps the classifier's thinking from flashing cards red, at the price of a real dialog showing red up to that long after it appeared. In the other modes a permission is always a dialog, and the card turns red within a few seconds.
+
 ## Requirements and limits
 
 - Claude Code 2.1.286 or later. The mod API is early access and may change between releases; a release that breaks the band gets a fix here.
@@ -66,6 +71,7 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 - macOS for the jump (`open claude://…`); elsewhere the link is copied to the clipboard.
 - The hand-off cannot choose the new session's model (above).
 - A permission dialog cannot be answered from another session: playpen shows what it asks and takes you there.
+- In auto mode a real permission dialog shows red only after the set wait (30 s by default), since the app does not tell plugins when its classifier hands a call to you.
 
 ## How it works
 
