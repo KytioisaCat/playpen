@@ -35,6 +35,7 @@ type Own = {
   permission: string | null // what a permission dialog asks to do, when one is up
   suggestion: string | null
   lastPromptAt: number
+  activeAt?: number // the board's active clock when you last wrote here
   updatedAt: number
   isRetired?: boolean // handed off to a new session; off the board for good
 }
@@ -115,11 +116,13 @@ let isPromptUp = false
 // --- options -----------------------------------------------------------------
 
 let maxCards = 6
+let windowMs = 8 * 60 * 60 * 1000 // of active time
 let shouldSummarize = true
 let summaryModel = 'haiku'
 
 function readOptions(options: PluginOptions) {
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && v > 0 ? v : fallback)
+  windowMs = num(options.window_hours, 8) * 60 * 60 * 1000
   maxCards = Math.min(12, num(options.max_cards, 6))
   shouldSummarize = options.summarize !== false
   summaryModel = typeof options.model === 'string' && options.model ? options.model : 'haiku'
@@ -174,7 +177,12 @@ async function init($: EngineInterface) {
 // Hidden cards and the places on the board belong to the person, not to one
 // session: every band reads the same file each poll, and a write merges into
 // what is there, so a card closed in one session is closed in all of them.
-type Board = { hidden: Record<string, number>; slots: string[]; order: string[] }
+// activeMs is the board's clock of your working time: it moves only by the
+// gaps between your prompts, in any session, each counted up to PAUSE_MS, so a
+// night, a weekend or a lunch adds nothing. A card falls off when that clock
+// has run windowMs past the moment you last wrote in its session.
+type Board = { hidden: Record<string, number>; slots: string[]; order: string[]; activeMs: number; lastActiveAt: number }
+const PAUSE_MS = 30 * 60 * 1000
 
 const boardPath = () => `${home}/.claude/playpen/board.json`
 
@@ -182,7 +190,7 @@ async function readBoard($: EngineInterface): Promise<Board | null> {
   try {
     if (!(await $.fs.exists(boardPath()))) return null
     const b = JSON.parse(await $.fs.read(boardPath())) as Partial<Board>
-    return { hidden: b.hidden ?? {}, slots: b.slots ?? [], order: b.order ?? [] }
+    return { hidden: b.hidden ?? {}, slots: b.slots ?? [], order: b.order ?? [], activeMs: b.activeMs ?? 0, lastActiveAt: b.lastActiveAt ?? 0 }
   } catch {
     return null // half-written: this round keeps what it had
   }
@@ -215,19 +223,34 @@ async function syncBoard($: EngineInterface) {
     hidden = b.hidden
     slots = b.slots
     order = b.order
+    activeMs = b.activeMs
   }
 }
 
+let activeMs = 0
+
+// Your prompt moves the active clock by the gap since the last one, up to a pause.
+async function tickActive($: EngineInterface): Promise<number> {
+  const now = await $.clock.now()
+  const b = (await readBoard($)) ?? { hidden, slots, order, activeMs: 0, lastActiveAt: 0 }
+  const gap = b.lastActiveAt > 0 ? Math.min(Math.max(0, now - b.lastActiveAt), PAUSE_MS) : 0
+  await writeBoard($, { activeMs: b.activeMs + gap, lastActiveAt: now })
+  return activeMs
+}
+
 async function writeBoard($: EngineInterface, patch: Partial<Board>) {
-  const b = (await readBoard($)) ?? { hidden: {}, slots: [], order: [] }
+  const b = (await readBoard($)) ?? { hidden: {}, slots: [], order: [], activeMs: 0, lastActiveAt: 0 }
   const next: Board = {
     hidden: { ...b.hidden, ...(patch.hidden ?? {}) },
     slots: union(b.slots, patch.slots ?? []).slice(-32),
     order: union(b.order, patch.order ?? []).slice(-64),
+    activeMs: Math.max(b.activeMs, patch.activeMs ?? 0),
+    lastActiveAt: Math.max(b.lastActiveAt, patch.lastActiveAt ?? 0),
   }
   hidden = next.hidden
   slots = next.slots
   order = next.order
+  activeMs = next.activeMs
   try {
     await $.fs.write(boardPath(), JSON.stringify(next))
   } catch {
@@ -384,6 +407,11 @@ async function heartbeat($: EngineInterface) {
   await writeMe($, self?.title ? { title: self.title } : {})
 }
 
+// Whether a card has fallen off: active time past the window. A file from
+// before the active clock existed counts by the wall clock, a day and a half.
+const isStale = (o: Own, now: number) =>
+  o.activeAt !== undefined ? activeMs - o.activeAt > windowMs : now - o.lastPromptAt > 36 * 60 * 60 * 1000
+
 // A session whose card is still on the board takes it back when it starts:
 // the app stops idle sessions' processes and starts them again when opened,
 // and that is the same session you were working in, not a look at an old one.
@@ -395,7 +423,7 @@ async function resumeCard($: EngineInterface) {
     const was = JSON.parse(await $.fs.read(path)) as Own
     const now = await $.clock.now()
     const hiddenAt = hidden[me.id]
-    if (was.isRetired) return
+    if (was.isRetired || (was.state !== 'waiting' && isStale(was, now))) return
     if (hiddenAt !== undefined && was.lastPromptAt <= hiddenAt) return
     hasPrompted = true
     await writeMe($, { lastPromptAt: was.lastPromptAt, state: 'done' })
@@ -496,6 +524,8 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     if (o.state === 'ended' && appIds && !appIds.has(o.id) && o.id !== me?.id) continue
     const hiddenAt = hidden[o.id]
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
+    // a red card stays until handled; the others fall off after the window of active time
+    if (o.state !== 'waiting' && isStale(o, now)) continue
     const mini = minis[o.id]
     cards.push({
       ...o,
@@ -1080,7 +1110,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     hasPrompted = true
-    await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now() })
+    await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now(), activeAt: await tickActive($) })
     if (isBriefGiven) return next(e)
     isBriefGiven = true
     const brief = await briefContext($)
@@ -1098,7 +1128,7 @@ export const register: Register = (on, options) => {
     if (!hasPrompted && isMachineTurn) return next(e)
     const isFirst = !hasPrompted
     hasPrompted = true
-    await writeMe($, { state: 'working', suggestion: null, ...(isFirst ? { lastPromptAt: await $.clock.now() } : {}) })
+    await writeMe($, { state: 'working', suggestion: null, ...(isFirst ? { lastPromptAt: await $.clock.now(), activeAt: await tickActive($) } : {}) })
     return next(e)
   })
 

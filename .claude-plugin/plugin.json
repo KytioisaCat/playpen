@@ -1,6 +1,6 @@
 {
   "name": "playpen",
-  "version": "0.9.3-dev.4",
+  "version": "0.9.3-dev.5",
   "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": {
     "name": "Joel Rönnqvist"
@@ -14,6 +14,14 @@
     "multitasking"
   ],
   "userConfig": {
+    "window_hours": {
+      "type": "number",
+      "title": "Hours on the board",
+      "description": "A card stays this many hours of your active time after you last wrote in its session. Active time runs only between your prompts; a pause over half an hour, a night or a weekend does not count. A red card stays until handled.",
+      "default": 8,
+      "min": 1,
+      "max": 168
+    },
     "max_cards": {
       "type": "number",
       "title": "Maximum cards",
