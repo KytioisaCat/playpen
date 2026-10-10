@@ -1303,6 +1303,9 @@ export const register: Register = (on, options) => {
     // label, hand-off, reply and ×, then the gist
     const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((columns - (PER_ROW - 1)) / PER_ROW)))
     const perRow = Math.max(1, Math.floor((columns + 1) / (cardWidth + 1)))
+    // a terminal draws whole cells; the desktop app takes half a cell of air
+    // between a card's frame and its content, and between the cards
+    const space = e.surface === 'terminal' ? 1 : 0.5
     const inner = cardWidth - 4 // less the frame and its padding
     const labelMax = Math.max(8, inner - 8) // room for ✦ ► ×
 
@@ -1359,7 +1362,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={space}>
           {deck.map((card, i) => {
             const isMe = me !== null && card.id === me.id
             const isOpen = openId === card.id
@@ -1375,7 +1378,7 @@ export const register: Register = (on, options) => {
                 key={`card:${card.id}`}
                 flexDirection="column"
                 width={cardWidth}
-                paddingX={1}
+                paddingX={space}
                 borderStyle="round"
                 borderDimColor={!isMe}
                 hover={{ borderDimColor: false }}
