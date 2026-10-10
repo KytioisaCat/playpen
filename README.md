@@ -25,7 +25,7 @@ Run four or five sessions at once and the question is always the same: *which on
 
 A small model writes the label and gist in the language of the reply; each pair is written once and cached.
 
-- **A card exists because you wrote in that session.** It appears at your first prompt there and stays for 8 hours after you last wrote in it, until you press × or archive the session. When the app stops an idle session's process, or you restart the app, the card rests: grey, with its last summary, and wakes up when you open that session again. A red card stays until you have dealt with it.
+- **A card exists because you wrote in that session.** It appears at your first prompt there and stays until you press ×, archive the session, or newer sessions take its place. When the app stops an idle session's process, or you restart the app, or you come back the next morning, the card rests: grey, with its last summary, and wakes up when you open that session again. So the board always shows where you left off.
 - **Click the label** to jump to that session.
 - **Permission dialogs are answered in their own session.** A red card for a permission shows what it asks to run (`Bash: git push origin main`) and an **open session** button. Claude Code draws that dialog itself and lets no plugin answer it, since the answer authorises an action; playpen tells you where to go, and you approve or deny there. Questions (`AskUserQuestion`) are plain answers and can be given from any card.
 - **Places belong to projects.** The first card from a folder takes the next free place; a later session in the same folder sits with it. Nothing moves when activity changes, and nothing moves under the pointer.
@@ -42,11 +42,10 @@ From any Claude Code session:
 /reload-plugins
 ```
 
-The install dialog asks for four settings; the defaults are fine.
+The install dialog asks for a few settings; the defaults are fine.
 
 | Setting | Default | What it does |
 | :- | :- | :- |
-| Hours on the board | 8 | A card stays this many hours after you last wrote in its session. A red card stays until handled. |
 | Maximum cards | 6 | How many cards the band shows at most, three per row. |
 | Short labels | on | Let a small model write the label and gist. Off, the card shows the title and the latest reply cut short. |
 | Label model | `haiku` | Model alias or id for the labels. |

@@ -114,14 +114,12 @@ let isPromptUp = false
 
 // --- options -----------------------------------------------------------------
 
-let windowMs = 8 * 60 * 60 * 1000
 let maxCards = 6
 let shouldSummarize = true
 let summaryModel = 'haiku'
 
 function readOptions(options: PluginOptions) {
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && v > 0 ? v : fallback)
-  windowMs = num(options.window_hours, 8) * 60 * 60 * 1000
   maxCards = Math.min(12, num(options.max_cards, 6))
   shouldSummarize = options.summarize !== false
   summaryModel = typeof options.model === 'string' && options.model ? options.model : 'haiku'
@@ -397,7 +395,7 @@ async function resumeCard($: EngineInterface) {
     const was = JSON.parse(await $.fs.read(path)) as Own
     const now = await $.clock.now()
     const hiddenAt = hidden[me.id]
-    if (was.isRetired || now - was.lastPromptAt > windowMs) return
+    if (was.isRetired) return
     if (hiddenAt !== undefined && was.lastPromptAt <= hiddenAt) return
     hasPrompted = true
     await writeMe($, { lastPromptAt: was.lastPromptAt, state: 'done' })
@@ -494,12 +492,10 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
   for (const o of await readAll($)) {
     if (o.isRetired) continue
     // a stopped process is not a closed session: its card rests until the
-    // session is archived, you press ×, or the window passes
+    // session is archived, you press ×, or newer sessions take its place
     if (o.state === 'ended' && appIds && !appIds.has(o.id) && o.id !== me?.id) continue
     const hiddenAt = hidden[o.id]
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
-    // a red card stays until handled; the others fall off after the window
-    if (o.state !== 'waiting' && now - o.lastPromptAt > windowMs) continue
     const mini = minis[o.id]
     cards.push({
       ...o,
