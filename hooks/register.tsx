@@ -1299,14 +1299,19 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || isCollapsed || deck.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const columns = e.props.bodyColumns
+    // a terminal draws whole cells; the desktop app takes half a cell of air
+    // between a card's frame and its content, and between the cards, and a
+    // hairline between the rows
+    const space = e.surface === 'terminal' ? 1 : 0.5
     // three cards across; each is two rows inside a thin frame: the lamp,
     // label, hand-off, reply and ×, then the gist
-    const cardWidth = Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor((columns - (PER_ROW - 1)) / PER_ROW)))
-    const perRow = Math.max(1, Math.floor((columns + 1) / (cardWidth + 1)))
-    // a terminal draws whole cells; the desktop app takes half a cell of air
-    // between a card's frame and its content, and between the cards
-    const space = e.surface === 'terminal' ? 1 : 0.5
-    const inner = cardWidth - 4 // less the frame and its padding
+    // a terminal draws whole cells, and a card stops at MAX_CARD there; the
+    // desktop app takes fractions, so three cards fill the band's width
+    const isCells = e.surface === 'terminal'
+    const fit = (columns - (PER_ROW - 1) * space) / PER_ROW
+    const cardWidth = isCells ? Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor(fit))) : Math.max(MIN_CARD, fit - 0.01)
+    const perRow = Math.max(1, Math.floor((columns + space) / (cardWidth + space)))
+    const inner = Math.floor(cardWidth - 4) // less the frame and its padding
     const labelMax = Math.max(8, inner - 8) // room for ✦ ► ×
 
     // The popover: twice a card wide, drawn over the neighbours and never in
@@ -1362,7 +1367,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" columnGap={space}>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={space} rowGap={e.surface === 'terminal' ? 0 : 0.1}>
           {deck.map((card, i) => {
             const isMe = me !== null && card.id === me.id
             const isOpen = openId === card.id
