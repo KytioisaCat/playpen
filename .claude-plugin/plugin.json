@@ -1,6 +1,6 @@
 {
   "name": "playpen",
-  "version": "0.9.3-dev.7",
+  "version": "0.9.3-dev.8",
   "description": "The sessions you are working in right now as small cards above the prompt: a status lamp, a short label, what just happened, and one press to answer or jump there.",
   "author": {
     "name": "Joel Rönnqvist"
@@ -39,8 +39,8 @@
     "model": {
       "type": "string",
       "title": "Label model",
-      "description": "Model alias or id for the short labels.",
-      "default": "haiku"
+      "description": "Model alias or id for the short labels. Claude Haiku 5.5 by default, the cheapest current model.",
+      "default": "claude-haiku-5-5"
     },
     "auto_red_seconds": {
       "type": "number",

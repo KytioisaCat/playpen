@@ -49,7 +49,7 @@ The install dialog asks for a few settings; the defaults are fine.
 | Hours on the board | 8 | A card stays this many hours of your active time after you last wrote in its session; pauses over half an hour do not count. A red card stays until handled. |
 | Maximum cards | 6 | How many cards the band shows at most, three per row. |
 | Short labels | on | Let a small model write the label and gist. Off, the card shows the title and the latest reply cut short. |
-| Label model | `haiku` | Model alias or id for the labels. |
+| Label model | `claude-haiku-5-5` | Model alias or id for the labels. |
 | Red after, in auto mode | 30 s | How long a call may wait for a permission in auto mode before the card turns red. See [Permissions in auto mode](#permissions-in-auto-mode). |
 
 To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/playpen`.

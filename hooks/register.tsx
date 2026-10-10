@@ -55,10 +55,11 @@ const STALE_MS = 45_000
 const ASK_MS = 2_500
 let askAutoMs = 30_000 // the person's setting: how long auto mode's classifier gets before red
 let sessionMode: string | null = null // the app's permission mode for this session
-const LABEL_MAX = 18
-const GIST_MAX = 22
-const LABEL_ASK = 16
-const GIST_ASK = 20
+// sized for a desktop card a third of the band wide; a narrower card cuts them
+const LABEL_MAX = 28
+const GIST_MAX = 36
+const LABEL_ASK = 24
+const GIST_ASK = 32
 const SNIPPET_MAX = 400 // of the latest reply, kept for the expanded card
 const PER_ROW = 3
 const MIN_CARD = 24
@@ -118,14 +119,14 @@ let isPromptUp = false
 let maxCards = 6
 let windowMs = 8 * 60 * 60 * 1000 // of active time
 let shouldSummarize = true
-let summaryModel = 'haiku'
+let summaryModel = 'claude-haiku-5-5'
 
 function readOptions(options: PluginOptions) {
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && v > 0 ? v : fallback)
   windowMs = num(options.window_hours, 8) * 60 * 60 * 1000
   maxCards = Math.min(12, num(options.max_cards, 6))
   shouldSummarize = options.summarize !== false
-  summaryModel = typeof options.model === 'string' && options.model ? options.model : 'haiku'
+  summaryModel = typeof options.model === 'string' && options.model ? options.model : 'claude-haiku-5-5'
   askAutoMs = Math.min(300, Math.max(3, num(options.auto_red_seconds, 30))) * 1000
 }
 
@@ -160,7 +161,7 @@ async function init($: EngineInterface) {
   if (home) return
   home = (await $.env.get('HOME')) ?? '/tmp'
   ownDir = `${home}/.claude/playpen/sessions`
-  minis = ((await $.store.get('minis-v2')) as Record<string, Mini> | undefined) ?? {}
+  minis = ((await $.store.get('minis-v3')) as Record<string, Mini> | undefined) ?? {}
   if (!(await readBoard($))) {
     // the first band on the shared board brings what its own store kept
     await writeBoard($, {
@@ -500,7 +501,7 @@ async function summarizeNext($: EngineInterface) {
         gist: trim(parsed.gist || card.snippet, GIST_MAX),
       }
       minis = { ...minis, [card.id]: mini }
-      await $.store.set('minis-v2', minis)
+      await $.store.set('minis-v3', minis)
       lastDeckJson = '' // force a redraw on the next poll
     }
   } catch {
