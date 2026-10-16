@@ -243,8 +243,8 @@ async function writeBoard($: EngineInterface, patch: Partial<Board>) {
   const b = (await readBoard($)) ?? { hidden: {}, slots: [], order: [], activeMs: 0, lastActiveAt: 0 }
   const next: Board = {
     hidden: { ...b.hidden, ...(patch.hidden ?? {}) },
-    slots: union(b.slots, patch.slots ?? []).slice(-32),
-    order: union(b.order, patch.order ?? []).slice(-64),
+    slots: union(b.slots, patch.slots ?? []).slice(-128),
+    order: union(b.order, patch.order ?? []).slice(-512),
     activeMs: Math.max(b.activeMs, patch.activeMs ?? 0),
     lastActiveAt: Math.max(b.lastActiveAt, patch.lastActiveAt ?? 0),
   }
@@ -535,18 +535,31 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     })
   }
 
-  // a folder keeps its place; within it, sessions keep the order they came in
-  const newSlots = cards.map(c => c.cwd).filter((cwd, i, all) => !slots.includes(cwd) && all.indexOf(cwd) === i)
-  const fresh = cards.map(c => c.id).filter(id => !order.includes(id))
-  if (newSlots.length > 0 || fresh.length > 0) await writeBoard($, { slots: newSlots, order: fresh })
   // a full board makes room from its resting cards, the longest unwritten first
-  const resting = cards.filter(c => c.state === 'ended').sort((a, b) => a.lastPromptAt - b.lastPromptAt)
+  const resting = cards.filter(c => c.state === 'ended').sort((a, b) => a.lastPromptAt - b.lastPromptAt || (a.id < b.id ? -1 : 1))
   const drop = new Set(resting.slice(0, Math.max(0, cards.length - maxCards)).map(c => c.id))
-  const shown = cards.filter(c => !drop.has(c.id))
-  shown.sort(
-    (a, b) => slots.indexOf(a.cwd) - slots.indexOf(b.cwd) || order.indexOf(a.id) - order.indexOf(b.id),
-  )
-  return shown.slice(0, maxCards)
+  // a folder keeps its place; within it, sessions keep the order they came in.
+  // One that has no place yet goes after those that do, by when you wrote in
+  // it, so every band sorts the same cards the same way.
+  const rank = (list: string[], key: string) => {
+    const i = list.indexOf(key)
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i
+  }
+  const shown = cards
+    .filter(c => !drop.has(c.id))
+    .sort(
+      (a, b) =>
+        rank(slots, a.cwd) - rank(slots, b.cwd) ||
+        rank(order, a.id) - rank(order, b.id) ||
+        a.lastPromptAt - b.lastPromptAt ||
+        (a.id < b.id ? -1 : 1),
+    )
+    .slice(0, maxCards)
+  // only cards on the board get a place, so the list never pushes them out
+  const newSlots = shown.map(c => c.cwd).filter((cwd, i, all) => !slots.includes(cwd) && all.indexOf(cwd) === i)
+  const fresh = shown.map(c => c.id).filter(id => !order.includes(id))
+  if (newSlots.length > 0 || fresh.length > 0) await writeBoard($, { slots: newSlots, order: fresh })
+  return shown
 }
 
 async function refresh($: EngineInterface) {
