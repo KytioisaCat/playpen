@@ -36,13 +36,16 @@ type Own = {
   suggestion: string | null
   lastPromptAt: number
   activeAt?: number // the board's active clock when you last wrote here
+  // the card's label and gist, written by the session itself so every band
+  // shows the same words; miniKey is what they were made from
+  label?: string
+  gist?: string
+  miniKey?: string
   updatedAt: number
   isRetired?: boolean // handed off to a new session; off the board for good
 }
 
 type Card = Own & { label: string; gist: string }
-
-type Mini = { key: string; label: string; gist: string }
 
 const POLL_MS = 3_000
 const INBOX_MS = 1_000
@@ -104,7 +107,6 @@ let isCollapsed = false
 let isPolling = false
 let isSummarizing = false
 let hidden: Record<string, number> = {}
-let minis: Record<string, Mini> = {}
 let slots: string[] = [] // folders, in the order their first card appeared
 let order: string[] = [] // session ids, in the order they first appeared
 
@@ -161,7 +163,6 @@ async function init($: EngineInterface) {
   if (home) return
   home = (await $.env.get('HOME')) ?? '/tmp'
   ownDir = `${home}/.claude/playpen/sessions`
-  minis = ((await $.store.get('minis-v3')) as Record<string, Mini> | undefined) ?? {}
   if (!(await readBoard($))) {
     // the first band on the shared board brings what its own store kept
     await writeBoard($, {
@@ -464,18 +465,20 @@ async function readAll($: EngineInterface): Promise<Own[]> {
 
 // the label and gist are made for this title, reply and open question; a
 // change in any of them is a new pair to summarize
-const miniKey = (card: Pick<Card, 'title' | 'snippet' | 'question' | 'permission'>) =>
+const miniKey = (card: Pick<Own, 'title' | 'snippet' | 'question' | 'permission'>) =>
   `${card.title}\u0000${card.snippet}\u0000${card.question?.text ?? ''}\u0000${card.permission ?? ''}`
 
-// One card at a time, so a burst of activity costs one small call per poll
-// and never blocks the band.
-async function summarizeNext($: EngineInterface) {
-  if (!shouldSummarize || isSummarizing) return
-  const card = deck.find(c => c.state !== 'working' && minis[c.id]?.key !== miniKey(c))
-  if (!card) return
+// A session writes its own card's label and gist into its own file, once per
+// change, and every band reads them from there. The label is the topic: the
+// model sees the current one and keeps it unless the topic has clearly moved,
+// so a first wrong guess can be corrected without the label wandering.
+async function summarizeMe($: EngineInterface) {
+  if (!shouldSummarize || isSummarizing || !me || !hasPrompted || me.state === 'working') return
+  const key = miniKey(me)
+  if (me.miniKey === key) return
   isSummarizing = true
   try {
-    const folder = card.cwd.split('/').pop() ?? ''
+    const folder = me.cwd.split('/').pop() ?? ''
     const r = await $.model.complete({
       model: summaryModel,
       effort: 'low',
@@ -485,24 +488,25 @@ async function summarizeNext($: EngineInterface) {
         'You write labels for small cards that show what is going on in several coding sessions at once. ' +
         'Reply with exactly one JSON line: {"label": "...", "gist": "..."}. ' +
         `"label" (max ${LABEL_ASK} characters): the topic of the session, so the reader knows which chat it is. Prefer the concrete subject (feature, bug, component, document) over generic words. ` +
+        'When a current label is given, return it unchanged unless the session has clearly moved to another topic or the label is plainly wrong; the reader finds the card by it. ' +
         `"gist" (max ${GIST_ASK} characters): the current status from the latest reply. Lead with what matters: done, needs a decision or input, error, blocked, in progress, or a question asked. Telegram style, no trailing period. ` +
         'Write in the language of the latest reply; if there is none, the language of the title. Keep proper nouns and technical terms as they are. No other text.',
       prompt:
-        `Project folder: ${folder}\nSession title: ${card.title}\nLatest reply from Claude: ${card.snippet || '(nothing yet)'}` +
-        (card.question ? `\nOpen question to the person right now (the gist should say what is asked): ${card.question.text}` : '') +
-        (card.permission ? `\nA permission dialog is waiting for the person right now (the gist should say what it asks to do): ${card.permission}` : ''),
+        `Project folder: ${folder}\nSession title: ${me.title}\n` +
+        (me.label ? `Current label: ${me.label}\n` : '') +
+        `Latest reply from Claude: ${me.snippet || '(nothing yet)'}` +
+        (me.question ? `\nOpen question to the person right now (the gist should say what is asked): ${me.question.text}` : '') +
+        (me.permission ? `\nA permission dialog is waiting for the person right now (the gist should say what it asks to do): ${me.permission}` : ''),
     })
-    if (r.isAnswered) {
+    if (r.isAnswered && me) {
       const match = r.text.match(/\{[\s\S]*\}/)
       const parsed = match ? (JSON.parse(match[0]) as { label?: string; gist?: string }) : {}
-      const mini: Mini = {
-        key: miniKey(card),
-        label: trim(parsed.label || card.title, LABEL_MAX),
-        gist: trim(parsed.gist || card.snippet, GIST_MAX),
-      }
-      minis = { ...minis, [card.id]: mini }
-      await $.store.set('minis-v3', minis)
-      lastDeckJson = '' // force a redraw on the next poll
+      await writeMe($, {
+        miniKey: key,
+        label: trim(parsed.label || me.label || me.title, LABEL_MAX),
+        gist: trim(parsed.gist || me.snippet, GIST_MAX),
+      })
+      void refresh($)
     }
   } catch {
     // a model that refuses or answers oddly: the card keeps its plain text
@@ -527,11 +531,10 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
     // a red card stays until handled; the others fall off after the window of active time
     if (o.state !== 'waiting' && isStale(o, now)) continue
-    const mini = minis[o.id]
     cards.push({
       ...o,
-      label: mini?.label ?? trim(o.title, LABEL_MAX),
-      gist: mini?.gist ?? trim(o.snippet, GIST_MAX),
+      label: o.label || trim(o.title, LABEL_MAX),
+      gist: o.gist || trim(o.snippet, GIST_MAX),
     })
   }
 
@@ -572,7 +575,7 @@ async function refresh($: EngineInterface) {
       lastDeckJson = json
       $.ui.invalidate('ui.render')
     }
-    void summarizeNext($)
+    void summarizeMe($)
   } finally {
     isPolling = false
   }

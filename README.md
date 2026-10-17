@@ -23,7 +23,7 @@ Run four or five sessions at once and the question is always the same: *which on
 | **►** | answer from here: the open question with its options, or the suggested next prompt with a send button. A permission dialog is the exception: see below |
 | **×** | hide the card until you write in that session again, in every session's band |
 
-A small model writes the label and gist in the language of the reply; each pair is written once and cached.
+A small model writes the label and gist in the language of the reply. Each session writes its own card's words, so every band shows the same card the same way, and the label keeps to the topic: it changes only when the session has clearly moved on.
 
 - **A card exists because you wrote in that session.** It appears at your first prompt there and stays for 8 hours of your *active* time after you last wrote in it, until you press × or archive the session. Active time runs only between your prompts: a pause over half an hour, a night or a weekend does not count, so in the morning the board still shows where you left off, while a session you have not touched through a working day falls off. When the app stops an idle session's process, or you restart the app, the card rests: grey, with its last summary, and wakes up when you open that session again. A red card stays until you have dealt with it.
 - **Click the label** to jump to that session.
