@@ -39,6 +39,7 @@ type Own = {
   // the card's label and gist, written by the session itself so every band
   // shows the same words; miniKey is what they were made from
   label?: string
+  labelTitle?: string // the session title the label was made for
   gist?: string
   miniKey?: string
   updatedAt: number
@@ -469,9 +470,9 @@ const miniKey = (card: Pick<Own, 'title' | 'snippet' | 'question' | 'permission'
   `${card.title}\u0000${card.snippet}\u0000${card.question?.text ?? ''}\u0000${card.permission ?? ''}`
 
 // A session writes its own card's label and gist into its own file, once per
-// change, and every band reads them from there. The label is the topic: the
-// model sees the current one and keeps it unless the topic has clearly moved,
-// so a first wrong guess can be corrected without the label wandering.
+// change, and every band reads them from there. The label is made once and
+// kept, since you find a card by it; it is made again only when the session's
+// title changes (you renamed it). The gist follows every turn.
 async function summarizeMe($: EngineInterface) {
   if (!shouldSummarize || isSummarizing || !me || !hasPrompted || me.state === 'working') return
   const key = miniKey(me)
@@ -488,12 +489,10 @@ async function summarizeMe($: EngineInterface) {
         'You write labels for small cards that show what is going on in several coding sessions at once. ' +
         'Reply with exactly one JSON line: {"label": "...", "gist": "..."}. ' +
         `"label" (max ${LABEL_ASK} characters): the topic of the session, so the reader knows which chat it is. Prefer the concrete subject (feature, bug, component, document) over generic words. ` +
-        'When a current label is given, return it unchanged unless the session has clearly moved to another topic or the label is plainly wrong; the reader finds the card by it. ' +
         `"gist" (max ${GIST_ASK} characters): the current status from the latest reply. Lead with what matters: done, needs a decision or input, error, blocked, in progress, or a question asked. Telegram style, no trailing period. ` +
         'Write in the language of the latest reply; if there is none, the language of the title. Keep proper nouns and technical terms as they are. No other text.',
       prompt:
         `Project folder: ${folder}\nSession title: ${me.title}\n` +
-        (me.label ? `Current label: ${me.label}\n` : '') +
         `Latest reply from Claude: ${me.snippet || '(nothing yet)'}` +
         (me.question ? `\nOpen question to the person right now (the gist should say what is asked): ${me.question.text}` : '') +
         (me.permission ? `\nA permission dialog is waiting for the person right now (the gist should say what it asks to do): ${me.permission}` : ''),
@@ -501,9 +500,11 @@ async function summarizeMe($: EngineInterface) {
     if (r.isAnswered && me) {
       const match = r.text.match(/\{[\s\S]*\}/)
       const parsed = match ? (JSON.parse(match[0]) as { label?: string; gist?: string }) : {}
+      const isLocked = !!me.label && me.labelTitle === me.title
       await writeMe($, {
         miniKey: key,
-        label: trim(parsed.label || me.label || me.title, LABEL_MAX),
+        labelTitle: me.title,
+        label: isLocked ? me.label : trim(parsed.label || me.title, LABEL_MAX),
         gist: trim(parsed.gist || me.snippet, GIST_MAX),
       })
       void refresh($)
