@@ -1330,7 +1330,11 @@ export const register: Register = (on, options) => {
     const cardWidth = isCells ? Math.max(MIN_CARD, Math.min(MAX_CARD, Math.floor(fit))) : Math.max(MIN_CARD, fit - 0.01)
     const perRow = Math.max(1, Math.floor((columns + space) / (cardWidth + space)))
     const inner = Math.floor(cardWidth - 4) // less the frame and its padding
-    const labelMax = Math.max(8, inner - 8) // room for ✦ ► ×
+    const labelMax = Math.max(8, inner - 2) // the label row holds the lamp and the project tag
+    // the buttons sit close in the desktop app; a terminal needs whole cells
+    const tight = e.surface === 'terminal' ? 1 : 0.25
+    // the project: the folder's name, none for a session without a folder
+    const project = (card: Card) => (isScratch(card.cwd) ? '' : trim(card.cwd.split('/').pop() ?? '', 14))
 
     // The popover: twice a card wide, drawn over the neighbours and never in
     // the flow, so no card moves when it shows. The band clips at its own
@@ -1406,17 +1410,37 @@ export const register: Register = (on, options) => {
                 borderDimColor={!isMe}
                 hover={{ borderDimColor: false }}
               >
-                <Box flexDirection="row" justifyContent="space-between">
-                  <Box flexDirection="row" gap={1} overflow="hidden">
+                {/* Row one: lamp, label, and the project as a small tag on the
+                    right. Row two: the gist, red while the session needs you,
+                    and the three buttons, close together. */}
+                <Box flexDirection="row" justifyContent="space-between" gap={tight}>
+                  <Box flexDirection="row" gap={1} overflow="hidden" flexShrink={1}>
                     <Text color={lampColor(card.state)}>●</Text>
                     <Button
                       key={`jump:${card.id}`}
                       plain
-                      label={trim(card.label, labelMax)}
+                      label={trim(card.label, labelMax - project(card).length)}
                       onPress={() => void (isMe ? Promise.resolve() : jump($, card))}
                     />
                   </Box>
-                  <Box flexDirection="row" gap={1}>
+                  {project(card) && (
+                    <Text dimColor wrap="truncate-end">
+                      {project(card)}
+                    </Text>
+                  )}
+                </Box>
+                <Box flexDirection="row" justifyContent="space-between" gap={tight}>
+                  <Box flexShrink={1} overflow="hidden">
+                    <Text
+                      color={card.state === 'waiting' ? 'red' : undefined}
+                      dimColor={card.state !== 'waiting'}
+                      wrap="truncate-end"
+                    >
+                      {card.gist ||
+                        (card.state === 'waiting' ? (card.question ? 'asks you' : card.permission ? 'asks permission' : 'needs you') : stateWord(card.state))}
+                    </Text>
+                  </Box>
+                  <Box flexDirection="row" gap={tight} flexShrink={0}>
                     {armedId === card.id ? (
                       <Button
                         key={`handoff:${card.id}`}
@@ -1443,18 +1467,6 @@ export const register: Register = (on, options) => {
                     <Button key={`hide:${card.id}`} plain dimColor label="×" onPress={() => void hide($, card)} />
                   </Box>
                 </Box>
-                {/* Row two is the short form: the gist, red while the session
-                    needs you. A card that asks a question goes on below it with
-                    the question and one row per option, in the card's own
-                    width; the popover shows the same thing wide. */}
-                <Text
-                  color={card.state === 'waiting' ? 'red' : undefined}
-                  dimColor={card.state !== 'waiting'}
-                  wrap="truncate-end"
-                >
-                  {card.gist ||
-                    (card.state === 'waiting' ? (card.question ? 'asks you' : card.permission ? 'asks permission' : 'needs you') : stateWord(card.state))}
-                </Text>
                 {/* A terminal only: the card expanded in the flow, taller and
                     never wider. The full title where it adds to the label, then
                     the question with one row per option, or the latest reply in

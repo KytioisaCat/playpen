@@ -17,7 +17,7 @@ Run four or five sessions at once and the question is always the same: *which on
 | | |
 | :- | :- |
 | **Lamp** | yellow while Claude works · green when the turn is done · **red when the session needs you** (a permission dialog or a question) · grey while the session rests (its process stopped) |
-| **Label** | what the session is about, in a few words |
+| **Label** | what the session is about, in a few words, with the project (its folder) as a small tag on the right |
 | **Gist** | the state of its latest reply, in a few words; red while a question is open |
 | **✦** | hand the session off to a fresh one with a brief of its work (press twice: the first press arms it) |
 | **►** | answer from here: the open question with its options, or the suggested next prompt with a send button. A permission dialog is the exception: see below |
