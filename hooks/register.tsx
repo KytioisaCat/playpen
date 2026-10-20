@@ -516,6 +516,12 @@ async function summarizeMe($: EngineInterface) {
   }
 }
 
+// A /btw side question opens a session of its own, titled "btw: ...", under
+// the one it was asked in. Its card says so, whatever its label became.
+const isAside = (o: Pick<Own, 'title'>) => /^btw\b/i.test(o.title.trim())
+const asideLabel = (o: Pick<Own, 'title'>, label: string) =>
+  isAside(o) && !/^btw\b/i.test(label) ? `btw · ${label}` : label
+
 // --- the deck -------------------------------------------------------------------
 
 async function buildDeck($: EngineInterface): Promise<Card[]> {
@@ -534,7 +540,7 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     if (o.state !== 'waiting' && isStale(o, now)) continue
     cards.push({
       ...o,
-      label: o.label || trim(o.title, LABEL_MAX),
+      label: asideLabel(o, o.label || trim(o.title, LABEL_MAX)),
       gist: o.gist || trim(o.snippet, GIST_MAX),
     })
   }
