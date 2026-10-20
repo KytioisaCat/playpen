@@ -57,7 +57,7 @@ const STALE_MS = 45_000
 // dialog only follows when it cannot decide; a real dialog waits for you, so
 // a long bound there costs nothing but a late red.
 const ASK_MS = 2_500
-let askAutoMs = 30_000 // the person's setting: how long auto mode's classifier gets before red
+let askAutoMs = 45_000 // the person's setting: how long auto mode's classifier gets before red
 let sessionMode: string | null = null // the app's permission mode for this session
 // sized for a desktop card a third of the band wide; a narrower card cuts them
 const LABEL_MAX = 28
@@ -130,7 +130,7 @@ function readOptions(options: PluginOptions) {
   maxCards = Math.min(12, num(options.max_cards, 6))
   shouldSummarize = options.summarize !== false
   summaryModel = typeof options.model === 'string' && options.model ? options.model : 'claude-haiku-5-5'
-  askAutoMs = Math.min(300, Math.max(3, num(options.auto_red_seconds, 30))) * 1000
+  askAutoMs = Math.min(300, Math.max(3, num(options.auto_red_seconds, 45))) * 1000
 }
 
 // --- small helpers -------------------------------------------------------------

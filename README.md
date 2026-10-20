@@ -50,7 +50,7 @@ The install dialog asks for a few settings; the defaults are fine.
 | Maximum cards | 6 | How many cards the band shows at most, three per row. |
 | Short labels | on | Let a small model write the label and gist. Off, the card shows the title and the latest reply cut short. |
 | Label model | `claude-haiku-5-5` | Model alias or id for the labels. |
-| Red after, in auto mode | 30 s | How long a call may wait for a permission in auto mode before the card turns red. See [Permissions in auto mode](#permissions-in-auto-mode). |
+| Red after, in auto mode | 45 s | How long a call may wait for a permission in auto mode before the card turns red. See [Permissions in auto mode](#permissions-in-auto-mode). |
 
 To try it without installing, clone the repository and start a session with `claude --plugin-dir /path/to/playpen`.
 
@@ -62,7 +62,7 @@ When a session's context has grown long, press ✦ twice on its card. The sessio
 
 ## Permissions in auto mode
 
-In auto mode the app's classifier decides each permission itself, usually in a second or two, sometimes in ten or more, and only now and then leaves it to you as a dialog. A plugin is told that a call needs a permission and when the call is done, but not whether a dialog is up in between: the app keeps that to itself. So in auto mode playpen turns a card red when a call is waiting for a permission and the session has not moved for a set time, 30 seconds by default (*Red after, in auto mode*): no call has started or ended. Calls the classifier lets through one by one keep the session moving, so a queue stays yellow. That keeps the classifier's thinking from flashing cards red, at two prices: a real dialog shows red up to that long after it appeared, and a single approved command that runs longer than the wait (a long build, a big copy) looks the same as a dialog and may show red until it ends. In the other modes a permission is always a dialog, and the card turns red within a few seconds.
+In auto mode the app's classifier decides each permission itself, usually in a second or two, sometimes in ten or more, and only now and then leaves it to you as a dialog. A plugin is told that a call needs a permission and when the call is done, but not whether a dialog is up in between: the app keeps that to itself. So in auto mode playpen turns a card red when a call is waiting for a permission and the session has not moved for a set time, 45 seconds by default (*Red after, in auto mode*): no call has started or ended. Calls the classifier lets through one by one keep the session moving, so a queue stays yellow. That keeps the classifier's thinking from flashing cards red, at two prices: a real dialog shows red up to that long after it appeared, and a single approved command that runs longer than the wait (a long build, a big copy) looks the same as a dialog and may show red until it ends. In the other modes a permission is always a dialog, and the card turns red within a few seconds.
 
 ## Requirements and limits
 
@@ -71,7 +71,7 @@ In auto mode the app's classifier decides each permission itself, usually in a s
 - macOS for the jump (`open claude://…`); elsewhere the link is copied to the clipboard.
 - The hand-off cannot choose the new session's model (above).
 - A permission dialog cannot be answered from another session: playpen shows what it asks and takes you there.
-- In auto mode a real permission dialog shows red only after the set wait (30 s by default), since the app does not tell plugins when its classifier hands a call to you.
+- In auto mode a real permission dialog shows red only after the set wait (45 s by default), since the app does not tell plugins when its classifier hands a call to you.
 
 ## How it works
 
