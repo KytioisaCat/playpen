@@ -94,6 +94,9 @@ let handoffTurnId: string | null = null // the turn that writes the brief
 // session be started on a model, nothing more is tried.
 let wantedModel: string | null = null
 let isBriefGiven = false
+// background work the session's last turn left running (build agents, shells,
+// monitors): the turn ended, the work did not, so the card stays yellow
+let backgroundCount = 0
 let isMachineTurn = false // the latest prompt came from a routine or a task, not you
 // ✦ takes two presses: the first arms it for a few seconds, the second fires
 let armedId: string | null = null
@@ -474,7 +477,7 @@ const miniKey = (card: Pick<Own, 'title' | 'snippet' | 'question' | 'permission'
 // kept, since you find a card by it; it is made again only when the session's
 // title changes (you renamed it). The gist follows every turn.
 async function summarizeMe($: EngineInterface) {
-  if (!shouldSummarize || isSummarizing || !me || !hasPrompted || me.state === 'working') return
+  if (!shouldSummarize || isSummarizing || !me || !hasPrompted || (me.state === 'working' && backgroundCount === 0)) return
   const key = miniKey(me)
   if (me.miniKey === key) return
   isSummarizing = true
@@ -1281,6 +1284,15 @@ export const register: Register = (on, options) => {
     return { consumed: 'playpen relay submitted as a prompt' }
   })
 
+  // The engine's stop names the background work still in flight. A turn that
+  // ends while agents or shells it started keep running has not finished the
+  // work; the session wakes when they report, and its last turn ends done.
+  on('classic.Stop', async ($, e, next) => {
+    backgroundCount = (e.background_tasks ?? []).length
+    if (backgroundCount > 0 && me?.state === 'done') await writeMe($, { state: 'working' })
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     heldTurnId = null
     inFlight.clear()
@@ -1289,7 +1301,8 @@ export const register: Register = (on, options) => {
     timedIds.clear()
     isPromptUp = false
     const reply = await lastReply($)
-    await writeMe($, { state: 'done', question: null, permission: null, snippet: trim(reply, SNIPPET_MAX) })
+    const state = backgroundCount > 0 ? 'working' : 'done'
+    await writeMe($, { state, question: null, permission: null, snippet: trim(reply, SNIPPET_MAX) })
     void refresh($)
     // the turn that wrote the brief, and no other (not the one a hand-off
     // interrupted, not a subagent's): start the new session from it
