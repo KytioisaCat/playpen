@@ -517,10 +517,8 @@ async function summarizeMe($: EngineInterface) {
 }
 
 // A /btw side question opens a session of its own, titled "btw: ...", under
-// the one it was asked in. Its card says so, whatever its label became.
+// the one it was asked in. It belongs to that session, so it gets no card.
 const isAside = (o: Pick<Own, 'title'>) => /^btw\b/i.test(o.title.trim())
-const asideLabel = (o: Pick<Own, 'title'>, label: string) =>
-  isAside(o) && !/^btw\b/i.test(label) ? `btw · ${label}` : label
 
 // --- the deck -------------------------------------------------------------------
 
@@ -530,7 +528,7 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
   await syncAppIds($)
   const cards: Card[] = []
   for (const o of await readAll($)) {
-    if (o.isRetired) continue
+    if (o.isRetired || isAside(o)) continue
     // a stopped process is not a closed session: its card rests until the
     // session is archived, you press ×, or newer sessions take its place
     if (o.state === 'ended' && appIds && !appIds.has(o.id) && o.id !== me?.id) continue
@@ -540,7 +538,7 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
     if (o.state !== 'waiting' && isStale(o, now)) continue
     cards.push({
       ...o,
-      label: asideLabel(o, o.label || trim(o.title, LABEL_MAX)),
+      label: o.label || trim(o.title, LABEL_MAX),
       gist: o.gist || trim(o.snippet, GIST_MAX),
     })
   }
