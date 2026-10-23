@@ -167,7 +167,8 @@ async function init($: EngineInterface) {
   if (home) return
   home = (await $.env.get('HOME')) ?? '/tmp'
   ownDir = `${home}/.claude/playpen/sessions`
-  if (!(await readBoard($))) {
+  // only a missing board: one read while another band writes it is there
+  if (!(await $.fs.exists(boardPath()))) {
     // the first band on the shared board brings what its own store kept
     await writeBoard($, {
       hidden: ((await $.store.get('hidden')) as Record<string, number> | undefined) ?? {},
@@ -230,22 +231,33 @@ async function syncBoard($: EngineInterface) {
     slots = b.slots
     order = b.order
     activeMs = b.activeMs
+    lastActiveAt = b.lastActiveAt
   }
 }
 
 let activeMs = 0
+let lastActiveAt = 0
+
+// The board as it stands, to build a write on. A board another band is
+// writing right now reads as half a file: read again a moment later, and
+// failing that, build on what this band last read, never on an empty board,
+// which written back would reopen every closed card and reshuffle the places.
+async function baseBoard($: EngineInterface): Promise<Board> {
+  const b = (await readBoard($)) ?? (await $.clock.sleep(50).then(() => readBoard($)))
+  return b ?? { hidden, slots, order, activeMs, lastActiveAt }
+}
 
 // Your prompt moves the active clock by the gap since the last one, up to a pause.
 async function tickActive($: EngineInterface): Promise<number> {
   const now = await $.clock.now()
-  const b = (await readBoard($)) ?? { hidden, slots, order, activeMs: 0, lastActiveAt: 0 }
+  const b = await baseBoard($)
   const gap = b.lastActiveAt > 0 ? Math.min(Math.max(0, now - b.lastActiveAt), PAUSE_MS) : 0
   await writeBoard($, { activeMs: b.activeMs + gap, lastActiveAt: now })
   return activeMs
 }
 
 async function writeBoard($: EngineInterface, patch: Partial<Board>) {
-  const b = (await readBoard($)) ?? { hidden: {}, slots: [], order: [], activeMs: 0, lastActiveAt: 0 }
+  const b = await baseBoard($)
   const next: Board = {
     hidden: { ...b.hidden, ...(patch.hidden ?? {}) },
     slots: union(b.slots, patch.slots ?? []).slice(-128),
@@ -257,6 +269,7 @@ async function writeBoard($: EngineInterface, patch: Partial<Board>) {
   slots = next.slots
   order = next.order
   activeMs = next.activeMs
+  lastActiveAt = next.lastActiveAt
   try {
     await $.fs.write(boardPath(), JSON.stringify(next))
   } catch {
@@ -383,32 +396,74 @@ async function lastReply($: EngineInterface) {
 
 const mySnippet = async ($: EngineInterface) => trim(await lastReply($), SNIPPET_MAX)
 
+// The app may not have answered at start, and the card then carries a
+// made-up id whose link the app does not know. Until the app names this
+// session, the band cannot tell its own card among the others, and the
+// app's list of sessions, which leaves out the one asking, would drop it.
+let isSelfKnown = false
+let isLearning = false
+const SELF_WAIT_MS = 1_500
+
+// Takes the app's own id once it answers: a card this session had under it
+// is taken back, and a file written under the made-up one retires.
+async function learnSelf($: EngineInterface, given?: AppSession | null) {
+  if (!me || isLearning) return
+  isLearning = true
+  try {
+    const self = given !== undefined ? given : await Promise.race([selfApp($), $.clock.sleep(SELF_WAIT_MS).then(() => null)])
+    if (self?.permissionMode) sessionMode = self.permissionMode
+    if (!me || !self?.sessionId) return
+    isSelfKnown = true
+    if (self.sessionId !== me.id) {
+      const stale = me
+      me = {
+        ...me,
+        id: self.sessionId,
+        link: self.link ?? `claude://claude.ai/epitaxy/${self.sessionId}`,
+        title: self.title ?? me.title,
+      }
+      if (hasPrompted) {
+        // you wrote here before the app answered: the card keeps the words
+        // it had under its real id
+        const was = await readOwn($, me.id)
+        if (was && !was.isRetired) me = { ...me, label: was.label, labelTitle: was.labelTitle, gist: was.gist }
+        try {
+          await $.fs.write(`${ownDir}/${stale.id}.json`, JSON.stringify({ ...stale, isRetired: true }))
+        } catch {
+          // its heartbeat stops, so it ends on its own
+        }
+        await writeMe($)
+      } else {
+        await resumeCard($)
+      }
+    } else if (self.link && self.link !== me.link) {
+      me = { ...me, link: self.link }
+    }
+    void refresh($)
+  } finally {
+    isLearning = false
+  }
+}
+
+// Asks the app each second for a while after start, so the card has its
+// real id before you look down at the band, not at the next heartbeat.
+function learnSelfSoon($: EngineInterface, tries = 15) {
+  $.clock.after(1_000, () => {
+    void (async () => {
+      if (isSelfKnown || !me) return
+      await learnSelf($)
+      if (!isSelfKnown && tries > 1) learnSelfSoon($, tries - 1)
+    })()
+  })
+}
+
 // The heartbeat: proves the session is alive, and picks up a title the app
 // gave the session after its first prompt.
 async function heartbeat($: EngineInterface) {
   if (!me) return
-  const isMadeUp = me.id === `local_${me.engineId}`
-  if (!hasPrompted && !isMadeUp) return
+  if (!hasPrompted && isSelfKnown) return
   const self = await selfApp($)
-  if (self?.permissionMode) sessionMode = self.permissionMode
-  // The app may not have answered at start, and the card then carries a
-  // made-up id whose link the app does not know: take the app's own once it
-  // answers, and retire the file under the made-up one.
-  if (me && self?.sessionId && self.sessionId !== me.id) {
-    const stale = me
-    me = { ...me, id: self.sessionId, link: self.link ?? `claude://claude.ai/epitaxy/${self.sessionId}` }
-    if (hasPrompted) {
-      try {
-        await $.fs.write(`${ownDir}/${stale.id}.json`, JSON.stringify({ ...stale, isRetired: true }))
-      } catch {
-        // its heartbeat stops, so it ends on its own
-      }
-    } else {
-      await resumeCard($)
-    }
-  } else if (me && self?.link && self.link !== me.link) {
-    me = { ...me, link: self.link }
-  }
+  await learnSelf($, self)
   if (!hasPrompted) return
   await writeMe($, self?.title ? { title: self.title } : {})
 }
@@ -423,23 +478,43 @@ const isStale = (o: Own, now: number) =>
 // and that is the same session you were working in, not a look at an old one.
 async function resumeCard($: EngineInterface) {
   if (!me || hasPrompted) return
+  const was = await readOwn($, me.id)
+  if (!was) return // none, or unreadable: the card comes back at your next prompt
+  const now = await $.clock.now()
+  const hiddenAt = hidden[me.id]
+  if (was.isRetired || (was.state !== 'waiting' && isStale(was, now))) return
+  if (hiddenAt !== undefined && was.lastPromptAt <= hiddenAt) return
+  hasPrompted = true
+  // the same card as before the restart: its words, so the label stays the
+  // one you know it by, and its place on the active clock
+  await writeMe($, {
+    lastPromptAt: was.lastPromptAt,
+    activeAt: was.activeAt,
+    label: was.label,
+    labelTitle: was.labelTitle,
+    gist: was.gist,
+    miniKey: was.miniKey,
+    state: 'done',
+  })
+  void refresh($)
+}
+
+async function readOwn($: EngineInterface, id: string): Promise<Own | null> {
   try {
-    const path = `${ownDir}/${me.id}.json`
-    if (!(await $.fs.exists(path))) return
-    const was = JSON.parse(await $.fs.read(path)) as Own
-    const now = await $.clock.now()
-    const hiddenAt = hidden[me.id]
-    if (was.isRetired || (was.state !== 'waiting' && isStale(was, now))) return
-    if (hiddenAt !== undefined && was.lastPromptAt <= hiddenAt) return
-    hasPrompted = true
-    await writeMe($, { lastPromptAt: was.lastPromptAt, state: 'done' })
-    void refresh($)
+    const path = `${ownDir}/${id}.json`
+    if (!(await $.fs.exists(path))) return null
+    return JSON.parse(await $.fs.read(path)) as Own
   } catch {
-    // an unreadable file: the card comes back at your next prompt
+    return null
   }
 }
 
 // --- every session's file -----------------------------------------------------
+
+// Each file as last read whole. A file its session is writing right now reads
+// as half a file; the card keeps its last copy rather than leaving the band
+// for a round and moving every card after it.
+const lastGood = new Map<string, Own>()
 
 async function readAll($: EngineInterface): Promise<Own[]> {
   const all = new Map<string, Own>()
@@ -452,14 +527,18 @@ async function readAll($: EngineInterface): Promise<Own[]> {
   const now = await $.clock.now()
   for (const entry of entries) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    let read: Own | undefined
     try {
-      const o = JSON.parse(await $.fs.read(`${ownDir}/${entry.name}`)) as Own
-      // a process that died mid-turn never wrote 'ended'; the heartbeat tells
-      if (o.state !== 'ended' && now - o.updatedAt > STALE_MS) o.state = 'ended'
-      all.set(o.id, o)
+      read = JSON.parse(await $.fs.read(`${ownDir}/${entry.name}`)) as Own
+      lastGood.set(entry.name, read)
     } catch {
-      // half-written file: skip it this round
+      read = lastGood.get(entry.name)
     }
+    if (!read) continue
+    const o = { ...read }
+    // a process that died mid-turn never wrote 'ended'; the heartbeat tells
+    if (o.state !== 'ended' && now - o.updatedAt > STALE_MS) o.state = 'ended'
+    all.set(o.id, o)
   }
   if (me && hasPrompted) all.set(me.id, me)
   return [...all.values()]
@@ -533,8 +612,11 @@ async function buildDeck($: EngineInterface): Promise<Card[]> {
   for (const o of await readAll($)) {
     if (o.isRetired || isAside(o)) continue
     // a stopped process is not a closed session: its card rests until the
-    // session is archived, you press ×, or newer sessions take its place
-    if (o.state === 'ended' && appIds && !appIds.has(o.id) && o.id !== me?.id) continue
+    // session is archived, you press ×, or newer sessions take its place.
+    // The app's list leaves out the session asking, so a band that does not
+    // yet know its own id cannot tell its own resting card from an archived
+    // one, and keeps them all
+    if (o.state === 'ended' && appIds && isSelfKnown && !appIds.has(o.id) && o.id !== me?.id) continue
     const hiddenAt = hidden[o.id]
     if (hiddenAt !== undefined && o.lastPromptAt <= hiddenAt) continue
     // a red card stays until handled; the others fall off after the window of active time
@@ -1107,7 +1189,9 @@ export const register: Register = (on, options) => {
 
     await $.command.register({ name: 'board', description: 'Show or hide the playpen band', immediate: true })
 
+    isSelfKnown = !!self?.sessionId
     await resumeCard($)
+    if (!isSelfKnown) learnSelfSoon($)
 
     // a session the hand-off link opened: send its opener without an Enter
     void takePendingHandoff($, e.cwd)
@@ -1134,6 +1218,9 @@ export const register: Register = (on, options) => {
       if (hasPrompted) await writeMe($, { state: 'working', suggestion: null })
       return next(e)
     }
+    // a prompt before the app named this session would start a second card
+    // under the made-up id, beside the one it had
+    if (!isSelfKnown) await learnSelf($)
     hasPrompted = true
     await writeMe($, { state: 'working', suggestion: null, lastPromptAt: await $.clock.now(), activeAt: await tickActive($) })
     if (isBriefGiven) return next(e)
@@ -1416,16 +1503,19 @@ export const register: Register = (on, options) => {
             const column = (i % perRow) * (cardWidth + 1)
             const anchorRight = column + wide > columns
             return (
-              // a thin frame around the whole card: dim, full strength on this
-              // session, and the surface brightens it under the pointer by itself
+              // a thin frame around the whole card: dim, and the surface
+              // brightens it under the pointer by itself. This session's own
+              // card has a heavier frame at full strength, so a look down
+              // tells where you are without anything lighting up
               <Box
                 key={`card:${card.id}`}
                 flexDirection="column"
                 width={cardWidth}
                 paddingX={space}
-                borderStyle="round"
+                borderStyle={isMe ? 'bold' : 'round'}
                 borderDimColor={!isMe}
-                hover={{ borderDimColor: false }}
+                // the frame keeps its line under the pointer, so nothing jumps
+                hover={{ borderDimColor: false, borderStyle: isMe ? 'bold' : 'round' }}
               >
                 {/* Row one: lamp, label, and the project as a small tag on the
                     right. Row two: the gist, red while the session needs you,
